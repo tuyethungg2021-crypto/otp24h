@@ -10,8 +10,9 @@ import OrderHistory from './components/OrderHistory';
 import TopupView from './components/TopupView';
 import AdminSettings from './components/AdminSettings';
 import TopupManagement from './components/TopupManagement';
+import Marketplace from './components/Marketplace';
 import Toast from './components/Toast';
-import { SimService, ActiveOrder, User, SiteConfig, TopupRequest } from './types';
+import { SimService, ActiveOrder, User, SiteConfig, TopupRequest, MarketProduct, MarketPurchase } from './types';
 import { otpApi } from './services/otpApi';
 
 const DEFAULT_CONFIG: SiteConfig = {
@@ -39,6 +40,8 @@ const App: React.FC = () => {
   const [siteConfig, setSiteConfig] = useState<SiteConfig>(DEFAULT_CONFIG);
   const [balance, setBalance] = useState<number>(0);
   const [services, setServices] = useState<SimService[]>([]);
+  const [products, setProducts] = useState<MarketProduct[]>([]);
+  const [purchases, setPurchases] = useState<MarketPurchase[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [orders, setOrders] = useState<ActiveOrder[]>([]);
   const [topupRequests, setTopupRequests] = useState<TopupRequest[]>([]);
@@ -81,6 +84,12 @@ const App: React.FC = () => {
 
     const savedTopups = localStorage.getItem('otpsim_topups');
     if (savedTopups) setTopupRequests(JSON.parse(savedTopups));
+
+    const savedProducts = localStorage.getItem('otpsim_products');
+    if (savedProducts) setProducts(JSON.parse(savedProducts));
+
+    const savedPurchases = localStorage.getItem('otpsim_purchases');
+    if (savedPurchases) setPurchases(JSON.parse(savedPurchases));
   }, []);
 
   useEffect(() => {
@@ -94,6 +103,14 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('otpsim_users', JSON.stringify(allUsers));
   }, [allUsers]);
+
+  useEffect(() => {
+    localStorage.setItem('otpsim_products', JSON.stringify(products));
+  }, [products]);
+
+  useEffect(() => {
+    localStorage.setItem('otpsim_purchases', JSON.stringify(purchases));
+  }, [purchases]);
 
   const saveConfig = (newConfig: SiteConfig) => {
     setSiteConfig(newConfig);
@@ -144,7 +161,6 @@ const App: React.FC = () => {
       if (servicesData.length > 0) {
         const updatedServices = servicesData.map((s: SimService) => {
           const originalPrice = s.price || 0;
-          // Ưu tiên giá tùy chỉnh, nếu không có thì dùng global markup
           const customPrice = siteConfig.customPrices[s.id];
           const finalPrice = customPrice !== undefined 
             ? customPrice 
@@ -183,6 +199,43 @@ const App: React.FC = () => {
     }
     if (amount > 0) showToast(`Đã cộng ${amount.toLocaleString()}đ vào ví.`);
     else if (amount < 0) showToast(`Đã trừ ${Math.abs(amount).toLocaleString()}đ khỏi ví.`, 'info');
+  };
+
+  // Logic Mua Hàng Cửa Hàng
+  const handleBuyProduct = (product: MarketProduct) => {
+    if (!user) return;
+    if (balance < product.price) {
+      showToast("Số dư không đủ! Vui lòng nạp thêm tiền.", 'error');
+      setActiveTab('topup');
+      return;
+    }
+    if (product.items.length === 0) {
+      showToast("Sản phẩm này đã hết hàng!", 'error');
+      return;
+    }
+
+    const boughtItem = product.items[0];
+    const remainingItems = product.items.slice(1);
+
+    // 1. Cập nhật kho hàng
+    setProducts(prev => prev.map(p => p.id === product.id ? { ...p, items: remainingItems } : p));
+    
+    // 2. Trừ tiền
+    handleUpdateBalance(user.id, -product.price);
+
+    // 3. Lưu lịch sử
+    const newPurchase: MarketPurchase = {
+      id: 'pur-' + Date.now(),
+      userId: user.id,
+      productId: product.id,
+      productName: product.name,
+      content: boughtItem,
+      price: product.price,
+      createdAt: Date.now()
+    };
+    setPurchases(prev => [newPurchase, ...prev]);
+    
+    showToast(`Mua thành công ${product.name}! Kiểm tra tab "Đồ đã mua".`);
   };
 
   const handleSubmitTopup = (amount: number, method: 'BANK' | 'MOMO', content: string) => {
@@ -525,6 +578,7 @@ const App: React.FC = () => {
                  activeTab === 'dashboard' ? 'Bảng điều khiển' : 
                  activeTab === 'topup' ? 'Nạp tiền ví' : 
                  activeTab === 'topup-manage' ? 'Duyệt đơn nạp' :
+                 activeTab === 'market' ? 'Cửa hàng tài khoản' :
                  'Lịch sử thuê'}
               </h1>
              </div>
@@ -578,6 +632,16 @@ const App: React.FC = () => {
             />
           ) : activeTab === 'history' ? (
             <OrderHistory orders={historyOrders} role={user.role} />
+          ) : activeTab === 'market' ? (
+            <Marketplace 
+              user={user}
+              products={products}
+              purchases={purchases}
+              onAddProduct={(p) => setProducts(prev => [...prev, p])}
+              onUpdateProduct={(p) => setProducts(prev => prev.map(old => old.id === p.id ? p : old))}
+              onDeleteProduct={(id) => setProducts(prev => prev.filter(p => p.id !== id))}
+              onBuy={handleBuyProduct}
+            />
           ) : activeTab === 'topup' ? (
             <TopupView 
               config={siteConfig} 
@@ -595,6 +659,10 @@ const App: React.FC = () => {
               <span className="text-xl">🏠</span>
               <span className="text-[9px] font-black uppercase">Home</span>
            </button>
+           <button onClick={() => setActiveTab('market')} className={`flex flex-col items-center gap-1 ${activeTab === 'market' ? 'text-indigo-600' : 'text-slate-400'}`}>
+              <span className="text-xl">🛍️</span>
+              <span className="text-[9px] font-black uppercase">Shop</span>
+           </button>
            <button onClick={() => setActiveTab('history')} className={`flex flex-col items-center gap-1 ${activeTab === 'history' ? 'text-indigo-600' : 'text-slate-400'}`}>
               <span className="text-xl">📜</span>
               <span className="text-[9px] font-black uppercase">Lịch sử</span>
@@ -603,13 +671,6 @@ const App: React.FC = () => {
               <span className="text-xl">💳</span>
               <span className="text-[9px] font-black uppercase">Nạp</span>
            </button>
-           {user.role === 'admin' && (
-             <button onClick={() => setActiveTab('topup-manage')} className={`flex flex-col items-center gap-1 ${activeTab === 'topup-manage' ? 'text-indigo-600' : 'text-slate-400'} relative`}>
-                {pendingCount > 0 && <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[7px] w-3 h-3 rounded-full flex items-center justify-center">!</span>}
-                <span className="text-xl">✅</span>
-                <span className="text-[9px] font-black uppercase">Duyệt</span>
-             </button>
-           )}
         </div>
       </main>
     </div>

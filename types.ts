@@ -14,8 +14,8 @@ export interface SiteConfig {
   masterApiKey: string;
   announcement: string;
   // Profit settings
-  globalMarkup: number; // Ví dụ: 1.5 là cộng thêm 50%
-  customPrices: Record<number, number>; // Mapping ID dịch vụ -> Giá bán cố định
+  globalMarkup: number; 
+  customPrices: Record<number, number>; 
   // Bank info
   bankName: string;
   bankAccountNumber: string;
@@ -32,7 +32,26 @@ export interface SimService {
   name: string;
   code: string;
   price: number;
-  originalPrice?: number; // Giá gốc từ API để Admin so sánh
+  originalPrice?: number;
+}
+
+export interface MarketProduct {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  price: number;
+  items: string[]; // Danh sách tài khoản (ví dụ: user|pass|key)
+}
+
+export interface MarketPurchase {
+  id: string;
+  userId: string;
+  productId: string;
+  productName: string;
+  content: string; // Thông tin tài khoản đã nhận
+  price: number;
+  createdAt: number;
 }
 
 export interface ActiveOrder {

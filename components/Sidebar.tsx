@@ -14,6 +14,7 @@ interface SidebarProps {
 const Sidebar: React.FC<SidebarProps> = ({ balance, role, activeTab, setActiveTab, siteName, logoInitial, onRefresh }) => {
   const menuItems = [
     { id: 'dashboard', icon: '🏠', label: 'Trang chủ' },
+    { id: 'market', icon: '🛍️', label: 'Cửa hàng' },
     { id: 'history', icon: '📜', label: 'Lịch sử thuê' },
     ...(role === 'admin' ? [
       { id: 'users', icon: '👥', label: 'Quản lý đại lý' },
