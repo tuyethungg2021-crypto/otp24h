@@ -3,14 +3,16 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 
-const rootElement = document.getElementById('root');
-if (!rootElement) {
-  console.error("Không tìm thấy phần tử root!");
-} else {
-  const root = createRoot(rootElement);
+const container = document.getElementById('root');
+
+if (container) {
+  const root = createRoot(container);
   root.render(
     <React.StrictMode>
       <App />
     </React.StrictMode>
   );
+  console.log("React App đã được mount thành công vào #root");
+} else {
+  console.error("Không tìm thấy phần tử #root để render app.");
 }
