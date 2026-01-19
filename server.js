@@ -1,4 +1,4 @@
-
+import http from 'node:http';
 const http = import('http');
 const fs = import('fs');
 const path = import('path');
