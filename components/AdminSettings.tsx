@@ -1,225 +1,257 @@
 
 import React, { useState } from 'react';
-import { SiteConfig } from '../types';
+import { SiteConfig, SimService } from '../types';
 
 interface AdminSettingsProps {
   config: SiteConfig;
   onSave: (newConfig: SiteConfig) => void;
+  services: SimService[];
 }
 
-const AdminSettings: React.FC<AdminSettingsProps> = ({ config, onSave }) => {
+const AdminSettings: React.FC<AdminSettingsProps> = ({ config, onSave, services }) => {
   const [formData, setFormData] = useState<SiteConfig>(config);
-  const [activeSubTab, setActiveSubTab] = useState<'config' | 'guide'>('config');
+  const [activeSubTab, setActiveSubTab] = useState<'general' | 'prices' | 'payment'>('general');
+  const [priceSearch, setPriceSearch] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSave(formData);
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    alert(`Đã sao chép: ${text}`);
+  const handleCustomPriceChange = (serviceId: number, value: string) => {
+    const price = value === '' ? undefined : parseInt(value);
+    const newCustomPrices = { ...formData.customPrices };
+    
+    if (price === undefined) {
+      delete newCustomPrices[serviceId];
+    } else {
+      newCustomPrices[serviceId] = price;
+    }
+    
+    setFormData({ ...formData, customPrices: newCustomPrices });
   };
 
-  const isApiConfigured = config.masterApiKey && config.masterApiKey.length > 10;
-  const isBankConfigured = config.bankAccountNumber && config.bankAccountNumber !== '1903XXXXXXXXXX';
+  const filteredServices = services.filter(s => 
+    s.name.toLowerCase().includes(priceSearch.toLowerCase())
+  );
 
   return (
-    <div className="max-w-4xl mx-auto py-6">
-      <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-10 border-b border-slate-100 bg-slate-50 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div>
-            <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tight">Quản trị hệ thống</h2>
-            <p className="text-sm text-slate-400 font-bold mt-1">Cấu hình vận hành website thực tế</p>
-          </div>
-          <div className="flex bg-slate-200/50 p-1.5 rounded-2xl">
+    <div className="max-w-5xl mx-auto py-6">
+      <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-sm overflow-hidden flex flex-col md:flex-row min-h-[600px]">
+        {/* Sub Sidebar */}
+        <div className="w-full md:w-64 bg-slate-50 border-r border-slate-100 p-6 space-y-2">
+          <button 
+            onClick={() => setActiveSubTab('general')}
+            className={`w-full text-left px-5 py-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${activeSubTab === 'general' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-100'}`}
+          >
+            ⚙️ Cài đặt chung
+          </button>
+          <button 
+            onClick={() => setActiveSubTab('prices')}
+            className={`w-full text-left px-5 py-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${activeSubTab === 'prices' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-100'}`}
+          >
+            💰 Giá dịch vụ
+          </button>
+          <button 
+            onClick={() => setActiveSubTab('payment')}
+            className={`w-full text-left px-5 py-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${activeSubTab === 'payment' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-100'}`}
+          >
+            🏦 Thanh toán
+          </button>
+          
+          <div className="pt-10">
             <button 
-              onClick={() => setActiveSubTab('config')}
-              className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${activeSubTab === 'config' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              onClick={handleSubmit}
+              className="w-full bg-slate-900 hover:bg-black text-white py-4 rounded-xl text-[10px] font-black shadow-xl transition-all uppercase tracking-widest"
             >
-              Cấu hình
-            </button>
-            <button 
-              onClick={() => setActiveSubTab('guide')}
-              className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${activeSubTab === 'guide' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              Hướng dẫn Live
+              Lưu cấu hình
             </button>
           </div>
         </div>
-        
-        {activeSubTab === 'config' ? (
-          <form onSubmit={handleSubmit} className="p-10 space-y-12 animate-in fade-in duration-300">
-            {/* Checklist nhanh */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-               <div className={`p-4 rounded-2xl border flex items-center gap-3 ${isApiConfigured ? 'bg-emerald-50 border-emerald-100' : 'bg-rose-50 border-rose-100'}`}>
-                  <span className="text-xl">{isApiConfigured ? '✅' : '❌'}</span>
-                  <div>
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Mã Kho SIM (CodeSim)</p>
-                    <p className={`text-xs font-bold ${isApiConfigured ? 'text-emerald-700' : 'text-rose-700'}`}>{isApiConfigured ? 'Đã kết nối kho' : 'Chưa nhập API Key'}</p>
-                  </div>
-               </div>
-               <div className={`p-4 rounded-2xl border flex items-center gap-3 ${isBankConfigured ? 'bg-emerald-50 border-emerald-100' : 'bg-rose-50 border-rose-100'}`}>
-                  <span className="text-xl">{isBankConfigured ? '✅' : '❌'}</span>
-                  <div>
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Thông tin Ngân hàng</p>
-                    <p className={`text-xs font-bold ${isBankConfigured ? 'text-emerald-700' : 'text-rose-700'}`}>{isBankConfigured ? 'Đã thiết lập' : 'Cần cập nhật STK'}</p>
-                  </div>
-               </div>
+
+        {/* Content Area */}
+        <div className="flex-1 p-8 md:p-12 overflow-y-auto max-h-[800px]">
+          {activeSubTab === 'general' && (
+            <div className="space-y-10 animate-in fade-in slide-in-from-right-4 duration-300">
+              <div className="border-b border-slate-100 pb-6">
+                 <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tight">Cài đặt chung</h2>
+                 <p className="text-sm text-slate-400 font-bold mt-1">Quản lý giao diện và thông báo hệ thống</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Tên Website</label>
+                  <input 
+                    type="text" 
+                    className="w-full bg-slate-50 border border-slate-200 px-6 py-3.5 rounded-2xl outline-none font-bold text-sm"
+                    value={formData.siteName}
+                    onChange={e => setFormData({...formData, siteName: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Telegram Admin</label>
+                  <input 
+                    type="text" 
+                    className="w-full bg-slate-50 border border-slate-200 px-6 py-3.5 rounded-2xl outline-none font-bold text-sm"
+                    value={formData.telegramLink}
+                    onChange={e => setFormData({...formData, telegramLink: e.target.value})}
+                  />
+                </div>
+                <div className="md:col-span-2 space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Master API Key (CodeSim)</label>
+                  <input 
+                    type="text" 
+                    className="w-full bg-slate-900 text-indigo-400 px-6 py-4 rounded-2xl outline-none font-mono text-xs border border-slate-800"
+                    value={formData.masterApiKey}
+                    onChange={e => setFormData({...formData, masterApiKey: e.target.value})}
+                  />
+                </div>
+                <div className="md:col-span-2 space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Thông báo toàn trang</label>
+                  <textarea 
+                    className="w-full bg-amber-50/50 border border-amber-100 px-6 py-4 rounded-2xl outline-none text-sm font-bold min-h-[120px]"
+                    value={formData.announcement}
+                    onChange={e => setFormData({...formData, announcement: e.target.value})}
+                  />
+                </div>
+              </div>
             </div>
+          )}
 
-            {/* Chung */}
-            <section className="space-y-6">
-               <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center text-lg">🌐</div>
-                  <h3 className="text-xs font-black text-indigo-600 uppercase tracking-[0.2em]">Cấu hình chung</h3>
-               </div>
-               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {activeSubTab === 'prices' && (
+            <div className="space-y-10 animate-in fade-in slide-in-from-right-4 duration-300">
+              <div className="border-b border-slate-100 pb-6 flex items-center justify-between">
                  <div>
-                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1">Tên Website / Thương hiệu</label>
-                   <input 
-                     type="text" 
-                     className="w-full bg-slate-50 border border-slate-200 px-5 py-3.5 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 transition-all font-bold text-sm"
-                     value={formData.siteName}
-                     onChange={e => setFormData({...formData, siteName: e.target.value})}
-                   />
+                    <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tight">Giá dịch vụ</h2>
+                    <p className="text-sm text-slate-400 font-bold mt-1">Điều chỉnh lợi nhuận cho các số thuê</p>
                  </div>
-                 <div>
-                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1">Link Telegram Hỗ Trợ (Admin)</label>
-                   <input 
-                     type="text" 
-                     className="w-full bg-slate-50 border border-slate-200 px-5 py-3.5 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 transition-all font-bold text-sm"
-                     value={formData.telegramLink}
-                     onChange={e => setFormData({...formData, telegramLink: e.target.value})}
-                   />
+                 <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-2xl flex items-center gap-4">
+                    <div>
+                       <p className="text-[10px] font-black text-indigo-400 uppercase">Tỉ lệ lợi nhuận chung</p>
+                       <div className="flex items-center gap-2">
+                          <input 
+                            type="number" 
+                            step="0.1"
+                            className="w-16 bg-white border border-indigo-200 rounded-lg px-2 py-1 text-sm font-black text-indigo-600 outline-none"
+                            value={formData.globalMarkup}
+                            onChange={e => setFormData({...formData, globalMarkup: parseFloat(e.target.value) || 1})}
+                          />
+                          <span className="text-[10px] font-bold text-slate-400">x Giá gốc</span>
+                       </div>
+                    </div>
                  </div>
-                 <div className="md:col-span-2">
-                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1">Thông báo toàn trang</label>
-                   <textarea 
-                     className="w-full bg-amber-50/50 border border-amber-100 px-5 py-4 rounded-2xl outline-none focus:ring-4 focus:ring-amber-500/10 focus:border-amber-400 transition-all font-bold text-sm text-amber-900 min-h-[100px]"
-                     value={formData.announcement}
-                     onChange={e => setFormData({...formData, announcement: e.target.value})}
-                     placeholder="Nhập nội dung thông báo cho khách hàng..."
-                   />
-                 </div>
-                 <div className="md:col-span-2">
-                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1">Master API Key (Lấy từ apisim.codesim.net)</label>
-                   <input 
-                     type="text" 
-                     className="w-full bg-slate-50 border border-slate-200 px-5 py-4 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 transition-all font-black text-sm text-indigo-600"
-                     value={formData.masterApiKey}
-                     onChange={e => setFormData({...formData, masterApiKey: e.target.value})}
-                   />
-                 </div>
-               </div>
-            </section>
+              </div>
 
-            {/* Ngân hàng */}
-            <section className="space-y-6 pt-10 border-t border-slate-100">
-               <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-red-100 text-red-600 rounded-lg flex items-center justify-center text-lg">🏦</div>
-                  <h3 className="text-xs font-black text-red-600 uppercase tracking-[0.2em]">Thông tin nhận tiền (Ngân hàng)</h3>
-               </div>
-               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                 <div>
-                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1">Tên Ngân hàng</label>
-                   <input 
-                     type="text" 
-                     className="w-full bg-slate-50 border border-slate-200 px-5 py-3.5 rounded-2xl outline-none font-bold text-sm"
-                     value={formData.bankName}
-                     onChange={e => setFormData({...formData, bankName: e.target.value})}
-                   />
+              <div className="space-y-6">
+                 <div className="relative">
+                    <input 
+                      type="text" 
+                      placeholder="Tìm ứng dụng cần sửa giá..." 
+                      className="w-full pl-6 pr-4 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 font-bold text-sm"
+                      value={priceSearch}
+                      onChange={e => setPriceSearch(e.target.value)}
+                    />
                  </div>
-                 <div>
-                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1">Số tài khoản (STK)</label>
-                   <input 
-                     type="text" 
-                     className="w-full bg-slate-50 border border-slate-200 px-5 py-3.5 rounded-2xl outline-none font-bold text-sm"
-                     value={formData.bankAccountNumber}
-                     onChange={e => setFormData({...formData, bankAccountNumber: e.target.value})}
-                   />
-                 </div>
-                 <div>
-                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1">Người thụ hưởng</label>
-                   <input 
-                     type="text" 
-                     className="w-full bg-slate-50 border border-slate-200 px-5 py-3.5 rounded-2xl outline-none font-bold text-sm"
-                     value={formData.bankBeneficiary}
-                     onChange={e => setFormData({...formData, bankBeneficiary: e.target.value.toUpperCase()})}
-                   />
-                 </div>
-                 <div>
-                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1">Link Ảnh QR (Dùng VietQR.io)</label>
-                   <input 
-                     type="text" 
-                     className="w-full bg-slate-50 border border-slate-200 px-5 py-3.5 rounded-2xl outline-none font-bold text-sm"
-                     value={formData.bankQrUrl}
-                     onChange={e => setFormData({...formData, bankQrUrl: e.target.value})}
-                   />
-                 </div>
-               </div>
-            </section>
 
-            <div className="pt-10">
-              <button 
-                type="submit"
-                className="w-full bg-slate-900 hover:bg-black text-white py-6 rounded-3xl text-sm font-black shadow-2xl shadow-slate-200 transition-all uppercase tracking-[0.3em] active:scale-[0.98]"
-              >
-                CẬP NHẬT TOÀN BỘ HỆ THỐNG
-              </button>
-            </div>
-          </form>
-        ) : (
-          <div className="p-10 space-y-10 animate-in slide-in-from-right-4 duration-300">
-             <div className="bg-indigo-600 p-8 rounded-[2.5rem] text-white relative overflow-hidden">
-                <div className="absolute top-[-10%] right-[-10%] w-40 h-40 bg-white/10 rounded-full blur-3xl"></div>
-                <h3 className="text-xl font-black mb-4 uppercase tracking-tight">Quy trình đưa Web lên Internet</h3>
-                <div className="space-y-4 relative z-10">
-                   <div className="flex gap-4">
-                      <div className="w-8 h-8 min-w-[32px] bg-white/20 rounded-full flex items-center justify-center font-black">1</div>
-                      <p className="text-sm font-bold opacity-90">Tải code lên <b>GitHub</b>.</p>
-                   </div>
-                   <div className="flex gap-4">
-                      <div className="w-8 h-8 min-w-[32px] bg-white/20 rounded-full flex items-center justify-center font-black">2</div>
-                      <p className="text-sm font-bold opacity-90">Kết nối GitHub với <b>Vercel.com</b> để Deploy.</p>
-                   </div>
-                   <div className="flex flex-col gap-4 bg-white/10 p-6 rounded-2xl border border-white/20">
-                      <p className="text-[10px] font-black uppercase tracking-widest opacity-70">Thiết lập Vercel Environment Variables:</p>
-                      <div className="flex items-center justify-between bg-black/20 p-3 rounded-xl">
-                         <code className="text-xs font-black">Key: API_KEY</code>
-                         <button onClick={() => copyToClipboard('API_KEY')} className="text-[10px] bg-white/20 px-2 py-1 rounded-md hover:bg-white/40">Copy</button>
+                 <div className="bg-white border border-slate-100 rounded-3xl overflow-hidden shadow-sm">
+                    <table className="w-full text-left">
+                       <thead>
+                          <tr className="bg-slate-50 border-b border-slate-100">
+                             <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Dịch vụ</th>
+                             <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Giá gốc</th>
+                             <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Giá bán hiện tại</th>
+                             <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Giá bán tùy chỉnh</th>
+                          </tr>
+                       </thead>
+                       <tbody className="divide-y divide-slate-50">
+                          {filteredServices.slice(0, 50).map(s => (
+                             <tr key={s.id} className="hover:bg-slate-50/50 transition-colors">
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                   <div className="flex flex-col">
+                                      <span className="text-xs font-black text-slate-800 uppercase">{s.name}</span>
+                                      <span className="text-[9px] text-slate-400 font-bold">ID: {s.id}</span>
+                                   </div>
+                                </td>
+                                <td className="px-6 py-4 text-center">
+                                   <span className="text-xs font-bold text-slate-400">{(s.originalPrice || 0).toLocaleString()}đ</span>
+                                </td>
+                                <td className="px-6 py-4 text-right">
+                                   <span className="text-xs font-black text-indigo-600">{s.price.toLocaleString()}đ</span>
+                                </td>
+                                <td className="px-6 py-4 text-right">
+                                   <div className="flex justify-end items-center gap-2">
+                                      <input 
+                                        type="number" 
+                                        placeholder="Tự động"
+                                        className="w-24 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-black text-emerald-600 outline-none focus:border-emerald-500 transition-all text-right"
+                                        value={formData.customPrices[s.id] || ''}
+                                        onChange={e => handleCustomPriceChange(s.id, e.target.value)}
+                                      />
+                                      <span className="text-[10px] font-bold text-slate-300">đ</span>
+                                   </div>
+                                </td>
+                             </tr>
+                          ))}
+                       </tbody>
+                    </table>
+                    {filteredServices.length > 50 && (
+                      <div className="p-4 bg-slate-50 text-center">
+                        <p className="text-[10px] font-bold text-slate-400">Hiển thị 50 kết quả đầu tiên. Vui lòng sử dụng ô tìm kiếm để thấy dịch vụ khác.</p>
                       </div>
-                      <p className="text-[11px] font-medium italic opacity-80">Lấy giá trị tại: <a href="https://aistudio.google.com/" target="_blank" className="underline font-black">Google AI Studio</a></p>
-                   </div>
-                </div>
-             </div>
+                    )}
+                 </div>
+              </div>
+            </div>
+          )}
 
-             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="p-8 bg-slate-50 border border-slate-200 rounded-[2rem]">
-                   <h4 className="text-xs font-black text-slate-800 uppercase mb-4 tracking-widest flex items-center gap-2">
-                      <span className="text-xl">💰</span> Cách kiếm tiền
-                   </h4>
-                   <ul className="space-y-3 text-[11px] font-bold text-slate-500 leading-relaxed">
-                      <li>• Bước 1: Bạn nạp tiền vào tài khoản <b>CodeSim.net</b>.</li>
-                      <li>• Bước 2: Khách nạp tiền cho bạn qua STK (Bạn duyệt thủ công ở tab Duyệt đơn nạp).</li>
-                      <li>• Bước 3: Khách thuê số, hệ thống dùng API CodeSim để lấy số.</li>
-                      <li>• Bước 4: Bạn hưởng chênh lệch giá (Web đã tự cộng 50% vào giá gốc).</li>
-                   </ul>
+          {activeSubTab === 'payment' && (
+            <div className="space-y-10 animate-in fade-in slide-in-from-right-4 duration-300">
+              <div className="border-b border-slate-100 pb-6">
+                 <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tight">Cấu hình thanh toán</h2>
+                 <p className="text-sm text-slate-400 font-bold mt-1">Thông tin ngân hàng hiển thị ở trang nạp tiền</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Ngân hàng</label>
+                  <input 
+                    type="text" 
+                    className="w-full bg-slate-50 border border-slate-200 px-6 py-3.5 rounded-2xl outline-none font-bold text-sm"
+                    value={formData.bankName}
+                    onChange={e => setFormData({...formData, bankName: e.target.value})}
+                  />
                 </div>
-                <div className="p-8 bg-slate-50 border border-slate-200 rounded-[2rem]">
-                   <h4 className="text-xs font-black text-slate-800 uppercase mb-4 tracking-widest flex items-center gap-2">
-                      <span className="text-xl">🔒</span> Bảo mật
-                   </h4>
-                   <p className="text-[11px] font-bold text-slate-500 leading-relaxed mb-4">
-                      Mật khẩu Admin mặc định là: <code className="bg-slate-200 px-2 py-0.5 rounded text-indigo-600">hung0385601880</code>.
-                   </p>
-                   <p className="text-[11px] font-bold text-slate-500 leading-relaxed italic">
-                      Lưu ý: Web sử dụng LocalStorage cho dữ liệu người dùng. Để chạy quy mô lớn, hãy nâng cấp lên Supabase.
-                   </p>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Số tài khoản</label>
+                  <input 
+                    type="text" 
+                    className="w-full bg-slate-50 border border-slate-200 px-6 py-3.5 rounded-2xl outline-none font-bold text-sm"
+                    value={formData.bankAccountNumber}
+                    onChange={e => setFormData({...formData, bankAccountNumber: e.target.value})}
+                  />
                 </div>
-             </div>
-          </div>
-        )}
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Chủ tài khoản (Viết Hoa)</label>
+                  <input 
+                    type="text" 
+                    className="w-full bg-slate-50 border border-slate-200 px-6 py-3.5 rounded-2xl outline-none font-bold text-sm"
+                    value={formData.bankBeneficiary}
+                    onChange={e => setFormData({...formData, bankBeneficiary: e.target.value.toUpperCase()})}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Link Ảnh QR (VietQR)</label>
+                  <input 
+                    type="text" 
+                    className="w-full bg-slate-50 border border-slate-200 px-6 py-3.5 rounded-2xl outline-none font-bold text-sm"
+                    value={formData.bankQrUrl}
+                    onChange={e => setFormData({...formData, bankQrUrl: e.target.value})}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -12,7 +12,10 @@ export interface SiteConfig {
   logoInitial: string;
   telegramLink: string;
   masterApiKey: string;
-  announcement: string; // Thông báo toàn trang
+  announcement: string;
+  // Profit settings
+  globalMarkup: number; // Ví dụ: 1.5 là cộng thêm 50%
+  customPrices: Record<number, number>; // Mapping ID dịch vụ -> Giá bán cố định
   // Bank info
   bankName: string;
   bankAccountNumber: string;
@@ -29,6 +32,7 @@ export interface SimService {
   name: string;
   code: string;
   price: number;
+  originalPrice?: number; // Giá gốc từ API để Admin so sánh
 }
 
 export interface ActiveOrder {
