@@ -5,8 +5,12 @@
   "description": "Nền tảng thuê SIM OTP",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "echo 'No build step required'"
   },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
   "dependencies": {},
   "engines": {
     "node": ">=18.0.0"
