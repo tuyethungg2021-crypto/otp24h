@@ -49,16 +49,16 @@
         const root = document.getElementById('root');
         if (root) {
           root.innerHTML = `<div style="padding:40px;text-align:center;font-family:sans-serif;">
-            <h2 style="color:#ef4444">Lỗi Hệ Thống</h2>
-            <p style="color:#64748b">${msg}</p>
-            <button onclick="location.reload()" style="margin-top:20px;padding:10px 20px;background:#4f46e5;color:white;border:none;border-radius:8px;cursor:pointer;">Tải lại trang</button>
+            <h2 style="color:#ef4444;font-weight:900;margin-bottom:10px;">LỖI KHỞI CHẠY</h2>
+            <p style="color:#64748b;font-size:14px;">${msg}</p>
+            <button onclick="location.reload()" style="margin-top:20px;padding:12px 24px;background:#4f46e5;color:white;border:none;border-radius:12px;cursor:pointer;font-weight:bold;box-shadow:0 10px 15px -3px rgba(79,70,229,0.3);">Tải lại trang</button>
           </div>`;
         }
         return false;
       };
     </script>
 
-    <!-- File này sẽ được tạo ra sau khi bạn chạy npm run build -->
+    <!-- Load file bundle duy nhất sau khi build -->
     <script type="module" src="/bundle.js"></script>
 </body>
 </html>
