@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Sidebar from './components/Sidebar.tsx';
 import ServiceGrid from './components/ServiceGrid.tsx';
@@ -212,7 +211,6 @@ const App: React.FC = () => {
     else if (amount < 0) showToast(`Đã trừ ${Math.abs(amount).toLocaleString()}đ khỏi ví.`, 'info');
   };
 
-  // Logic Mua Hàng Cửa Hàng
   const handleBuyProduct = (product: MarketProduct) => {
     if (!user) return;
     if (balance < product.price) {
@@ -228,13 +226,9 @@ const App: React.FC = () => {
     const boughtItem = product.items[0];
     const remainingItems = product.items.slice(1);
 
-    // 1. Cập nhật kho hàng
     setProducts(prev => prev.map(p => p.id === product.id ? { ...p, items: remainingItems } : p));
-    
-    // 2. Trừ tiền
     handleUpdateBalance(user.id, -product.price);
 
-    // 3. Lưu lịch sử
     const newPurchase: MarketPurchase = {
       id: 'pur-' + Date.now(),
       userId: user.id,
@@ -245,7 +239,6 @@ const App: React.FC = () => {
       createdAt: Date.now()
     };
     setPurchases(prev => [newPurchase, ...prev]);
-    
     showToast(`Mua thành công ${product.name}! Kiểm tra tab "Đồ đã mua".`);
   };
 
@@ -399,7 +392,6 @@ const App: React.FC = () => {
   const userTopups = topupRequests.filter(r => r.userId === user?.id);
   const pendingCount = topupRequests.filter(r => r.status === 'PENDING').length;
 
-  // FIX: Implemented missing renderUserDashboard function
   const renderUserDashboard = () => (
     <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
       <div className="xl:col-span-2 space-y-10">
@@ -449,7 +441,6 @@ const App: React.FC = () => {
     </div>
   );
 
-  // FIX: Implemented missing renderAdminDashboard function
   const renderAdminDashboard = () => (
     <div className="space-y-10">
        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -474,7 +465,6 @@ const App: React.FC = () => {
     </div>
   );
 
-  // FIX: Added login check to prevent crashing when user is null
   if (!user) {
     return <Login onLogin={handleLogin} onRegister={handleRegister} siteName={siteConfig.siteName} logoInitial={siteConfig.logoInitial} />;
   }
