@@ -7,23 +7,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Log mọi yêu cầu để kiểm tra trên Render Logs
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  next();
-});
-
-// Phục vụ file từ thư mục dist (nơi chứa bundle.js)
-app.use('/dist', express.static(path.join(__dirname, 'dist')));
-
-// Phục vụ file tĩnh khác
+// Phục vụ tất cả file tĩnh (bundle.js, index.html, v.v.) từ thư mục hiện tại
 app.use(express.static(__dirname));
 
-// Mặc định trả về index.html cho các route (SPA)
+// Luôn trả về index.html cho các route không phải là file thực tế
 app.get('*', (req, res) => {
+  // Nếu yêu cầu là một file (có dấu chấm trong tên) nhưng không tìm thấy thì trả 404
   if (req.path.includes('.') && !req.path.endsWith('.html')) {
     return res.status(404).send('File not found');
   }
+  // Còn lại thì phục vụ index.html (cho Single Page Application)
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
