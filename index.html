@@ -9,7 +9,17 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Inter', sans-serif; margin: 0; padding: 0; }
-        #root { min-height: 100vh; }
+        #root:empty::after {
+            content: "Đang tải hệ thống... Nếu màn hình vẫn trắng sau 10 giây, vui lòng kiểm tra Log trong Console (F12).";
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: #64748b;
+            font-size: 14px;
+            text-align: center;
+            padding: 20px;
+        }
     </style>
 <script type="importmap">
 {
@@ -20,14 +30,31 @@
     "@google/genai": "https://esm.sh/@google/genai@^1.37.0",
     "express": "https://esm.sh/express@^5.2.1",
     "path": "https://esm.sh/path@^0.12.7",
-    "url": "https://esm.sh/url@^0.11.4"
+    "url": "https://esm.sh/url@^0.11.4",
+    "fs": "https://esm.sh/fs@^0.0.1-security"
   }
 }
 </script>
 </head>
 <body class="bg-slate-50 text-slate-900">
     <div id="root"></div>
-    <!-- Script này sẽ chứa toàn bộ logic ứng dụng sau khi được build -->
+    
+    <!-- Script xử lý lỗi runtime để hiện thông báo thay vì trắng tinh -->
+    <script>
+      window.onerror = function(msg, url, lineNo, columnNo, error) {
+        const root = document.getElementById('root');
+        if (root) {
+          root.innerHTML = `<div style="padding: 20px; color: red; font-family: sans-serif;">
+            <h2>Lỗi hệ thống:</h2>
+            <p>${msg}</p>
+            <small>Vui lòng chụp màn hình này gửi Admin hỗ trợ.</small>
+          </div>`;
+        }
+        return false;
+      };
+    </script>
+
+    <!-- Load bundle đã được esbuild đóng gói -->
     <script type="module" src="/dist/bundle.js"></script>
 </body>
 </html>
