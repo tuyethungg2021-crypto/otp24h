@@ -1,7 +1,7 @@
-import http from 'node:http';
-const http = import('http');
-const fs = import('fs');
-const path = import('path');
+require http from 'node:http';
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
 
 const port = process.env.PORT || 3000;
 
