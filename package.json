@@ -5,8 +5,10 @@
   "description": "Nền tảng thuê SIM OTP",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
-  },
+  "dev": "vite",
+  "build": "vite build",
+  "preview": "vite preview"
+},
   "dependencies": {},
   "engines": {
     "node": ">=18.0.0"
