@@ -1,18 +1,18 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import Sidebar from './components/Sidebar';
-import ServiceGrid from './components/ServiceGrid';
-import OtpDashboard from './components/OtpDashboard';
-import AiSupport from './components/AiSupport';
-import Login from './components/Login';
-import UserManagement from './components/UserManagement';
-import OrderHistory from './components/OrderHistory';
-import TopupView from './components/TopupView';
-import AdminSettings from './components/AdminSettings';
-import TopupManagement from './components/TopupManagement';
-import Toast from './components/Toast';
-import { SimService, ActiveOrder, User, SiteConfig, TopupRequest } from './types';
-import { otpApi } from './services/otpApi';
+import Sidebar from './components/Sidebar.tsx';
+import ServiceGrid from './components/ServiceGrid.tsx';
+import OtpDashboard from './components/OtpDashboard.tsx';
+import AiSupport from './components/AiSupport.tsx';
+import Login from './components/Login.tsx';
+import UserManagement from './components/UserManagement.tsx';
+import OrderHistory from './components/OrderHistory.tsx';
+import TopupView from './components/TopupView.tsx';
+import AdminSettings from './components/AdminSettings.tsx';
+import TopupManagement from './components/TopupManagement.tsx';
+import Toast from './components/Toast.tsx';
+import { SimService, ActiveOrder, User, SiteConfig, TopupRequest } from './types.ts';
+import { otpApi } from './services/otpApi.ts';
 
 const DEFAULT_CONFIG: SiteConfig = {
   siteName: 'OTPSim',
@@ -79,8 +79,6 @@ const App: React.FC = () => {
       if (savedTopups) setTopupRequests(JSON.parse(savedTopups));
     } catch (e) {
       console.error("Lỗi khi đọc dữ liệu LocalStorage:", e);
-      // Nếu dữ liệu cũ bị lỗi, có thể xóa đi để web chạy lại được
-      // localStorage.clear();
     }
   }, []);
 
@@ -318,62 +316,44 @@ const App: React.FC = () => {
     );
   }
 
-  const renderAdminDashboard = () => {
-    const totalUsers = allUsers.filter(u => u.role !== 'admin').length;
-    const totalSystemBalance = allUsers.reduce((acc, u) => acc + (u.role !== 'admin' ? u.balance : 0), 0);
-    const totalSuccessOrders = orders.filter(o => o.status === 'RECEIVED').length;
-
-    return (
-      <div className="space-y-12 pb-24 lg:pb-0">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm">
-             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Tổng đại lý</p>
-             <div className="text-4xl font-black text-slate-800">{totalUsers}</div>
-          </div>
-          <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm">
-             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Ví khách giữ</p>
-             <div className="text-3xl font-black text-emerald-600">{totalSystemBalance.toLocaleString()}đ</div>
-          </div>
-          <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm">
-             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">OTP thành công</p>
-             <div className="text-3xl font-black text-indigo-600">{totalSuccessOrders}</div>
-          </div>
-          <div className="bg-indigo-600 p-8 rounded-[2.5rem] text-white shadow-xl relative overflow-hidden group">
-             <p className="text-[10px] font-black opacity-60 uppercase tracking-widest mb-1">Ví tổng API</p>
-             <div className="text-2xl font-black">{balance.toLocaleString()}đ</div>
-          </div>
+  const renderAdminDashboard = () => (
+    <div className="space-y-12 pb-24 lg:pb-0">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm">
+           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Tổng đại lý</p>
+           <div className="text-4xl font-black text-slate-800">{allUsers.filter(u => u.role !== 'admin').length}</div>
         </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-           <div className="bg-white p-10 rounded-[3rem] border border-slate-200 shadow-sm">
-              <h3 className="text-xl font-black text-slate-800 mb-6 uppercase tracking-tight">Thao tác nhanh</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <button onClick={() => setActiveTab('users')} className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] hover:border-indigo-500 hover:bg-white transition-all text-left">
-                   <div className="text-2xl mb-2">👥</div>
-                   <p className="font-black text-slate-800 text-sm">Quản lý User</p>
-                </button>
-                <button onClick={() => setActiveTab('topup-manage')} className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] hover:border-indigo-500 hover:bg-white transition-all text-left relative">
-                   {pendingCount > 0 && <span className="absolute top-4 right-4 bg-rose-500 text-white text-[8px] font-black w-5 h-5 rounded-full flex items-center justify-center">{pendingCount}</span>}
-                   <div className="text-2xl mb-2">✅</div>
-                   <p className="font-black text-slate-800 text-sm">Duyệt đơn nạp</p>
-                </button>
-              </div>
-           </div>
-           <div className="bg-slate-900 p-10 rounded-[3rem] text-white shadow-2xl">
-              <h3 className="text-xl font-black mb-4 uppercase tracking-tight">Trạng thái hệ thống</h3>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/10">
-                   <span className="text-xs font-bold text-slate-400">Máy chủ API Codesim</span>
-                   <span className="text-[10px] font-black text-emerald-400 uppercase flex items-center gap-2">
-                     <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span> Hoạt động
-                   </span>
-                </div>
-              </div>
-           </div>
+        <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm">
+           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Ví khách giữ</p>
+           <div className="text-3xl font-black text-emerald-600">{allUsers.reduce((acc, u) => acc + (u.role !== 'admin' ? u.balance : 0), 0).toLocaleString()}đ</div>
+        </div>
+        <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm">
+           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">OTP thành công</p>
+           <div className="text-3xl font-black text-indigo-600">{orders.filter(o => o.status === 'RECEIVED').length}</div>
+        </div>
+        <div className="bg-indigo-600 p-8 rounded-[2.5rem] text-white shadow-xl relative overflow-hidden group">
+           <p className="text-[10px] font-black opacity-60 uppercase tracking-widest mb-1">Ví tổng API</p>
+           <div className="text-2xl font-black">{balance.toLocaleString()}đ</div>
         </div>
       </div>
-    );
-  };
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+         <div className="bg-white p-10 rounded-[3rem] border border-slate-200 shadow-sm">
+            <h3 className="text-xl font-black text-slate-800 mb-6 uppercase tracking-tight">Thao tác nhanh</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <button onClick={() => setActiveTab('users')} className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] hover:border-indigo-500 hover:bg-white transition-all text-left">
+                 <div className="text-2xl mb-2">👥</div>
+                 <p className="font-black text-slate-800 text-sm">Quản lý User</p>
+              </button>
+              <button onClick={() => setActiveTab('topup-manage')} className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] hover:border-indigo-500 hover:bg-white transition-all text-left relative">
+                 {pendingCount > 0 && <span className="absolute top-4 right-4 bg-rose-500 text-white text-[8px] font-black w-5 h-5 rounded-full flex items-center justify-center">{pendingCount}</span>}
+                 <div className="text-2xl mb-2">✅</div>
+                 <p className="font-black text-slate-800 text-sm">Duyệt đơn nạp</p>
+              </button>
+            </div>
+         </div>
+      </div>
+    </div>
+  );
 
   const renderUserDashboard = () => (
     <div className="grid grid-cols-1 xl:grid-cols-4 gap-10 pb-24 lg:pb-0">
