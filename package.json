@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "build": "npx esbuild index.tsx --bundle --outfile=bundle.js --format=esm --jsx=automatic --minify --platform=browser --define:process.env.API_KEY=\\\"$API_KEY\\\""
+    "build": "npx esbuild index.tsx --bundle --outfile=bundle.js --format=esm --jsx=automatic --minify --platform=browser --define:process.env.API_KEY=\"$API_KEY\""
   },
   "dependencies": {
     "express": "^4.18.2",
