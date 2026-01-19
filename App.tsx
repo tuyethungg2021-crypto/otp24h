@@ -1,18 +1,19 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import Sidebar from './components/Sidebar.tsx';
-import ServiceGrid from './components/ServiceGrid.tsx';
-import OtpDashboard from './components/OtpDashboard.tsx';
-import AiSupport from './components/AiSupport.tsx';
-import Login from './components/Login.tsx';
-import UserManagement from './components/UserManagement.tsx';
-import OrderHistory from './components/OrderHistory.tsx';
-import TopupView from './components/TopupView.tsx';
-import AdminSettings from './components/AdminSettings.tsx';
-import TopupManagement from './components/TopupManagement.tsx';
-import Marketplace from './components/Marketplace.tsx';
-import Toast from './components/Toast.tsx';
-import { SimService, ActiveOrder, User, SiteConfig, TopupRequest, MarketProduct, MarketPurchase, ToastType } from './types.ts';
-import { otpApi } from './services/otpApi.ts';
+import Sidebar from './components/Sidebar';
+import ServiceGrid from './components/ServiceGrid';
+import OtpDashboard from './components/OtpDashboard';
+import AiSupport from './components/AiSupport';
+import Login from './components/Login';
+import UserManagement from './components/UserManagement';
+import OrderHistory from './components/OrderHistory';
+import TopupView from './components/TopupView';
+import AdminSettings from './components/AdminSettings';
+import TopupManagement from './components/TopupManagement';
+import Marketplace from './components/Marketplace';
+import Toast from './components/Toast';
+import { SimService, ActiveOrder, User, SiteConfig, TopupRequest, MarketProduct, MarketPurchase } from './types';
+import { otpApi } from './services/otpApi';
 
 const DEFAULT_CONFIG: SiteConfig = {
   siteName: 'OTPSim',
@@ -30,6 +31,8 @@ const DEFAULT_CONFIG: SiteConfig = {
   momoBeneficiary: '',
   momoQrUrl: ''
 };
+
+export type ToastType = 'success' | 'error' | 'info';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -133,19 +136,6 @@ const App: React.FC = () => {
     showToast("Đăng ký thành công! Bạn có thể đăng nhập ngay.");
   };
 
-  const handleLogin = (username: string, pass: string, rememberMe: boolean) => {
-    const found = allUsers.find(u => u.username === username && u.password === pass);
-    if (found) {
-      setUser(found);
-      if (rememberMe) {
-        localStorage.setItem('otpsim_session_userid', found.id);
-      }
-      showToast(`Chào mừng trở lại, ${found.username}!`);
-    } else {
-      showToast("Sai tài khoản hoặc mật khẩu!", 'error');
-    }
-  };
-
   const initData = async () => {
     if (!user) return;
     setLoading(true);
@@ -211,6 +201,7 @@ const App: React.FC = () => {
     else if (amount < 0) showToast(`Đã trừ ${Math.abs(amount).toLocaleString()}đ khỏi ví.`, 'info');
   };
 
+  // Logic Mua Hàng Cửa Hàng
   const handleBuyProduct = (product: MarketProduct) => {
     if (!user) return;
     if (balance < product.price) {
@@ -226,9 +217,13 @@ const App: React.FC = () => {
     const boughtItem = product.items[0];
     const remainingItems = product.items.slice(1);
 
+    // 1. Cập nhật kho hàng
     setProducts(prev => prev.map(p => p.id === product.id ? { ...p, items: remainingItems } : p));
+    
+    // 2. Trừ tiền
     handleUpdateBalance(user.id, -product.price);
 
+    // 3. Lưu lịch sử
     const newPurchase: MarketPurchase = {
       id: 'pur-' + Date.now(),
       userId: user.id,
@@ -239,6 +234,7 @@ const App: React.FC = () => {
       createdAt: Date.now()
     };
     setPurchases(prev => [newPurchase, ...prev]);
+    
     showToast(`Mua thành công ${product.name}! Kiểm tra tab "Đồ đã mua".`);
   };
 
@@ -392,82 +388,160 @@ const App: React.FC = () => {
   const userTopups = topupRequests.filter(r => r.userId === user?.id);
   const pendingCount = topupRequests.filter(r => r.status === 'PENDING').length;
 
+  if (!user) {
+    return (
+      <>
+        {toast && <Toast message={toast.message} type={toast.type} />}
+        <Login 
+          siteName={siteConfig.siteName}
+          logoInitial={siteConfig.logoInitial}
+          onLogin={(u, p, remember) => {
+            const found = allUsers.find(user => user.username === u && user.password === p);
+            if (found) {
+              setUser(found);
+              setActiveTab('dashboard');
+              if (remember) {
+                localStorage.setItem('otpsim_session_userid', found.id);
+              } else {
+                localStorage.removeItem('otpsim_session_userid');
+              }
+              showToast(`Chào mừng trở lại, ${found.username}!`);
+            } else {
+              showToast("Tài khoản hoặc mật khẩu không chính xác!", 'error');
+            }
+          }}
+          onRegister={handleRegister}
+        />
+      </>
+    );
+  }
+
+  const renderAdminDashboard = () => {
+    const totalUsers = allUsers.filter(u => u.role !== 'admin').length;
+    const totalSystemBalance = allUsers.reduce((acc, u) => acc + (u.role !== 'admin' ? u.balance : 0), 0);
+    const totalSuccessOrders = orders.filter(o => o.status === 'RECEIVED').length;
+
+    return (
+      <div className="space-y-12 pb-24 lg:pb-0">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm flex flex-col justify-center">
+             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Tổng đại lý</p>
+             <div className="text-4xl font-black text-slate-800">{totalUsers}</div>
+          </div>
+          <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm flex flex-col justify-center">
+             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Ví khách đang giữ</p>
+             <div className="text-3xl font-black text-emerald-600">{totalSystemBalance.toLocaleString()}đ</div>
+          </div>
+          <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm flex flex-col justify-center">
+             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Tổng OTP thành công</p>
+             <div className="text-3xl font-black text-indigo-600">{totalSuccessOrders}</div>
+          </div>
+          <div className="bg-indigo-600 p-8 rounded-[2.5rem] text-white shadow-xl flex flex-col justify-center relative overflow-hidden group">
+             <div className="absolute right-[-10px] bottom-[-10px] text-6xl opacity-10 group-hover:scale-125 transition-transform">💰</div>
+             <p className="text-[10px] font-black opacity-60 uppercase tracking-widest mb-1">Ví tổng API</p>
+             <div className="text-2xl font-black">{balance.toLocaleString()}đ</div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+           <div className="bg-white p-10 rounded-[3rem] border border-slate-200 shadow-sm">
+              <h3 className="text-xl font-black text-slate-800 mb-6 uppercase tracking-tight">Thao tác nhanh</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <button onClick={() => setActiveTab('users')} className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] hover:border-indigo-500 hover:bg-white transition-all text-left group">
+                   <div className="text-2xl mb-2 group-hover:scale-110 transition-transform">👥</div>
+                   <p className="font-black text-slate-800 text-sm">Quản lý User</p>
+                   <p className="text-[10px] text-slate-400 font-bold uppercase">Nạp/Trừ tiền, Xóa rác</p>
+                </button>
+                <button onClick={() => setActiveTab('topup-manage')} className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] hover:border-indigo-500 hover:bg-white transition-all text-left group relative">
+                   {pendingCount > 0 && <span className="absolute top-4 right-4 bg-rose-500 text-white text-[8px] font-black w-5 h-5 rounded-full flex items-center justify-center animate-bounce">{pendingCount}</span>}
+                   <div className="text-2xl mb-2 group-hover:scale-110 transition-transform">✅</div>
+                   <p className="font-black text-slate-800 text-sm">Duyệt đơn nạp</p>
+                   <p className="text-[10px] text-slate-400 font-bold uppercase">Kiểm tra Bank/Momo</p>
+                </button>
+              </div>
+           </div>
+           
+           <div className="bg-slate-900 p-10 rounded-[3rem] text-white shadow-2xl relative overflow-hidden">
+              <div className="absolute top-[-20px] right-[-20px] w-40 h-40 bg-indigo-500/20 rounded-full blur-3xl"></div>
+              <h3 className="text-xl font-black mb-4 uppercase tracking-tight">Trạng thái hệ thống</h3>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/10">
+                   <span className="text-xs font-bold text-slate-400">Máy chủ API Codesim</span>
+                   <span className="text-[10px] font-black text-emerald-400 uppercase flex items-center gap-2">
+                     <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span> Hoạt động
+                   </span>
+                </div>
+                <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/10">
+                   <span className="text-xs font-bold text-slate-400">Cài đặt Website</span>
+                   <button onClick={() => setActiveTab('settings')} className="text-[10px] font-black text-indigo-400 uppercase hover:underline">Chỉnh sửa ngay</button>
+                </div>
+              </div>
+           </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderUserDashboard = () => (
-    <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-      <div className="xl:col-span-2 space-y-10">
+    <div className="grid grid-cols-1 xl:grid-cols-4 gap-10 pb-24 lg:pb-0">
+      <div className="xl:col-span-3 space-y-16">
         <section>
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight ml-2">Dịch vụ SIM OTP</h2>
-            <div className="relative">
-              <input 
-                type="text" 
-                placeholder="Tìm ứng dụng..." 
-                className="pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-xs font-bold w-64 transition-all"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">🔍</span>
+          <div className="flex items-center justify-between mb-8">
+            <h2 className="text-xl font-black text-slate-800 flex items-center gap-3 uppercase tracking-tighter">
+              Số Điện Thoại Đang Thuê
+              {activeOrders.length > 0 && <span className="bg-amber-400 text-white text-[10px] px-2.5 py-1 rounded-full animate-pulse">{activeOrders.length}</span>}
+            </h2>
+          </div>
+          {activeOrders.length > 0 ? <OtpDashboard orders={activeOrders} onCancel={handleCancelOrder} /> : 
+          <div className="bg-white border-2 border-dashed border-slate-200 p-16 rounded-[3rem] text-center flex flex-col items-center">
+            <div className="w-16 h-16 bg-slate-50 text-slate-300 rounded-2xl flex items-center justify-center text-3xl mb-4">📭</div>
+            <p className="text-sm font-black text-slate-400 uppercase tracking-widest">Bạn chưa có số điện thoại nào</p>
+          </div>}
+        </section>
+
+        <section>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+            <h2 className="text-xl font-black text-slate-800 uppercase tracking-tighter">Chọn dịch vụ cần mã OTP</h2>
+            <div className="flex items-center gap-3 flex-1 max-w-md">
+               <div className="relative flex-1">
+                  <input 
+                    type="text" 
+                    placeholder="Tìm tên ứng dụng..." 
+                    className="w-full pl-5 pr-10 py-3 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 transition-all font-bold text-sm shadow-sm"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                  <div className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>
+                  </div>
+               </div>
+               <span className="hidden sm:inline-flex text-[10px] font-black text-emerald-500 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100 uppercase whitespace-nowrap">Online 24/7</span>
             </div>
           </div>
-          <ServiceGrid services={filteredServices} onRent={handleRentSim} />
-        </section>
 
-        <section className="space-y-6">
-           <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight ml-2 flex items-center gap-2">
-              <span className="w-2 h-2 bg-indigo-600 rounded-full animate-pulse"></span>
-              Đơn hàng đang chờ
-           </h2>
-           <OtpDashboard orders={activeOrders} onCancel={handleCancelOrder} />
+          {loading && services.length === 0 ? (
+            <div className="py-24 text-center">
+              <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
+              <p className="font-black text-slate-300 uppercase text-xs tracking-[0.3em]">Đang lấy danh sách dịch vụ...</p>
+            </div>
+          ) : (
+            <ServiceGrid services={filteredServices} onRent={handleRentSim} />
+          )}
         </section>
       </div>
-
+      
       <div className="space-y-8">
         <AiSupport />
-        
-        <div className="bg-indigo-900 rounded-[2.5rem] p-8 text-white relative overflow-hidden group shadow-2xl shadow-indigo-200">
-           <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-3xl group-hover:bg-white/20 transition-all duration-700"></div>
-           <h4 className="text-sm font-black uppercase tracking-widest mb-4">Cần hỗ trợ gấp?</h4>
-           <p className="text-xs text-indigo-200 font-bold leading-relaxed mb-8">Nếu gặp vấn đề về nạp tiền hoặc lỗi mã OTP, hãy nhắn tin ngay cho đội ngũ kỹ thuật của chúng tôi.</p>
-           <a 
-            href={siteConfig.telegramLink} 
-            target="_blank" 
-            rel="noreferrer"
-            className="inline-flex items-center gap-2 bg-white text-indigo-600 px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-50 transition-colors shadow-lg shadow-black/20"
-           >
-             Chat Telegram ✈️
-           </a>
+        <div className="bg-gradient-to-br from-indigo-600 to-blue-700 p-10 rounded-[3rem] text-white shadow-2xl relative overflow-hidden group">
+          <h3 className="text-xl font-black mb-3 tracking-tighter uppercase">Nạp Tiền Nhanh</h3>
+          <p className="text-[11px] opacity-80 leading-relaxed font-bold mb-8">
+            Nạp tiền để bắt đầu sử dụng dịch vụ của {siteConfig.siteName}. Mọi giao dịch đều được bảo mật.
+          </p>
+          <button onClick={() => setActiveTab('topup')} className="w-full bg-white text-indigo-700 py-4 rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl hover:scale-105 transition-transform">Nạp tiền ngay</button>
         </div>
       </div>
     </div>
   );
-
-  const renderAdminDashboard = () => (
-    <div className="space-y-10">
-       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Ví tổng hiện tại</p>
-             <div className="text-2xl font-black text-emerald-600">{balance.toLocaleString()}đ</div>
-          </div>
-          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Tổng đơn hàng</p>
-             <div className="text-2xl font-black text-indigo-600">{orders.length}</div>
-          </div>
-          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Nạp chờ duyệt</p>
-             <div className="text-2xl font-black text-amber-600">{pendingCount}</div>
-          </div>
-          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Thành viên</p>
-             <div className="text-2xl font-black text-slate-800">{allUsers.length - 1}</div>
-          </div>
-       </div>
-       {renderUserDashboard()}
-    </div>
-  );
-
-  if (!user) {
-    return <Login onLogin={handleLogin} onRegister={handleRegister} siteName={siteConfig.siteName} logoInitial={siteConfig.logoInitial} />;
-  }
 
   return (
     <div className="flex min-h-screen bg-[#f8fafc] relative">

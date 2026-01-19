@@ -1,6 +1,4 @@
 
-export type ToastType = 'success' | 'error' | 'info';
-
 export interface User {
   id: string;
   username: string;
