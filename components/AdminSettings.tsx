@@ -16,6 +16,14 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ config, onSave }) => {
     onSave(formData);
   };
 
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    alert(`Đã sao chép: ${text}`);
+  };
+
+  const isApiConfigured = config.masterApiKey && config.masterApiKey.length > 10;
+  const isBankConfigured = config.bankAccountNumber && config.bankAccountNumber !== '1903XXXXXXXXXX';
+
   return (
     <div className="max-w-4xl mx-auto py-6">
       <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-sm overflow-hidden">
@@ -42,6 +50,24 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ config, onSave }) => {
         
         {activeSubTab === 'config' ? (
           <form onSubmit={handleSubmit} className="p-10 space-y-12 animate-in fade-in duration-300">
+            {/* Checklist nhanh */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+               <div className={`p-4 rounded-2xl border flex items-center gap-3 ${isApiConfigured ? 'bg-emerald-50 border-emerald-100' : 'bg-rose-50 border-rose-100'}`}>
+                  <span className="text-xl">{isApiConfigured ? '✅' : '❌'}</span>
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Mã Kho SIM (CodeSim)</p>
+                    <p className={`text-xs font-bold ${isApiConfigured ? 'text-emerald-700' : 'text-rose-700'}`}>{isApiConfigured ? 'Đã kết nối kho' : 'Chưa nhập API Key'}</p>
+                  </div>
+               </div>
+               <div className={`p-4 rounded-2xl border flex items-center gap-3 ${isBankConfigured ? 'bg-emerald-50 border-emerald-100' : 'bg-rose-50 border-rose-100'}`}>
+                  <span className="text-xl">{isBankConfigured ? '✅' : '❌'}</span>
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Thông tin Ngân hàng</p>
+                    <p className={`text-xs font-bold ${isBankConfigured ? 'text-emerald-700' : 'text-rose-700'}`}>{isBankConfigured ? 'Đã thiết lập' : 'Cần cập nhật STK'}</p>
+                  </div>
+               </div>
+            </div>
+
             {/* Chung */}
             <section className="space-y-6">
                <div className="flex items-center gap-3">
@@ -151,19 +177,19 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ config, onSave }) => {
                 <div className="space-y-4 relative z-10">
                    <div className="flex gap-4">
                       <div className="w-8 h-8 min-w-[32px] bg-white/20 rounded-full flex items-center justify-center font-black">1</div>
-                      <p className="text-sm font-bold opacity-90">Tạo tài khoản <b>GitHub</b> và tải toàn bộ code này lên một Repository mới.</p>
+                      <p className="text-sm font-bold opacity-90">Tải code lên <b>GitHub</b>.</p>
                    </div>
                    <div className="flex gap-4">
                       <div className="w-8 h-8 min-w-[32px] bg-white/20 rounded-full flex items-center justify-center font-black">2</div>
-                      <p className="text-sm font-bold opacity-90">Truy cập <b>Vercel.com</b>, kết nối GitHub và chọn Repository vừa tạo để Deploy.</p>
+                      <p className="text-sm font-bold opacity-90">Kết nối GitHub với <b>Vercel.com</b> để Deploy.</p>
                    </div>
-                   <div className="flex gap-4">
-                      <div className="w-8 h-8 min-w-[32px] bg-white/20 rounded-full flex items-center justify-center font-black">3</div>
-                      <p className="text-sm font-bold opacity-90">Trong cài đặt Vercel, thêm biến môi trường <b>API_KEY</b> (Mã Gemini của bạn).</p>
-                   </div>
-                   <div className="flex gap-4">
-                      <div className="w-8 h-8 min-w-[32px] bg-white/20 rounded-full flex items-center justify-center font-black">4</div>
-                      <p className="text-sm font-bold opacity-90">Trỏ tên miền riêng (nếu có) vào Vercel qua bản ghi CNAME hoặc A.</p>
+                   <div className="flex flex-col gap-4 bg-white/10 p-6 rounded-2xl border border-white/20">
+                      <p className="text-[10px] font-black uppercase tracking-widest opacity-70">Thiết lập Vercel Environment Variables:</p>
+                      <div className="flex items-center justify-between bg-black/20 p-3 rounded-xl">
+                         <code className="text-xs font-black">Key: API_KEY</code>
+                         <button onClick={() => copyToClipboard('API_KEY')} className="text-[10px] bg-white/20 px-2 py-1 rounded-md hover:bg-white/40">Copy</button>
+                      </div>
+                      <p className="text-[11px] font-medium italic opacity-80">Lấy giá trị tại: <a href="https://aistudio.google.com/" target="_blank" className="underline font-black">Google AI Studio</a></p>
                    </div>
                 </div>
              </div>
@@ -174,10 +200,10 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ config, onSave }) => {
                       <span className="text-xl">💰</span> Cách kiếm tiền
                    </h4>
                    <ul className="space-y-3 text-[11px] font-bold text-slate-500 leading-relaxed">
-                      <li>• Bạn nạp tiền vào ví <b>Codesim</b> qua API.</li>
-                      <li>• Khách nạp tiền cho bạn qua STK (bạn duyệt đơn tay).</li>
-                      <li>• Khách thuê SIM với giá bạn đã cấu hình (mặc định x1.5 giá gốc).</li>
-                      <li>• Bạn hưởng chênh lệch từ mỗi lần khách thuê thành công.</li>
+                      <li>• Bước 1: Bạn nạp tiền vào tài khoản <b>CodeSim.net</b>.</li>
+                      <li>• Bước 2: Khách nạp tiền cho bạn qua STK (Bạn duyệt thủ công ở tab Duyệt đơn nạp).</li>
+                      <li>• Bước 3: Khách thuê số, hệ thống dùng API CodeSim để lấy số.</li>
+                      <li>• Bước 4: Bạn hưởng chênh lệch giá (Web đã tự cộng 50% vào giá gốc).</li>
                    </ul>
                 </div>
                 <div className="p-8 bg-slate-50 border border-slate-200 rounded-[2rem]">
@@ -185,10 +211,10 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ config, onSave }) => {
                       <span className="text-xl">🔒</span> Bảo mật
                    </h4>
                    <p className="text-[11px] font-bold text-slate-500 leading-relaxed mb-4">
-                      Mật khẩu Admin mặc định là: <code className="bg-slate-200 px-2 py-0.5 rounded text-indigo-600">hung0385601880</code>. Hãy đổi ngay khi web chạy thực tế.
+                      Mật khẩu Admin mặc định là: <code className="bg-slate-200 px-2 py-0.5 rounded text-indigo-600">hung0385601880</code>.
                    </p>
-                   <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
-                      Các dữ liệu người dùng hiện tại được lưu ở <b>LocalStorage</b> (trình duyệt). Để quản lý tập trung hàng ngàn user, bạn nên nâng cấp lên Database (Supabase/Firebase).
+                   <p className="text-[11px] font-bold text-slate-500 leading-relaxed italic">
+                      Lưu ý: Web sử dụng LocalStorage cho dữ liệu người dùng. Để chạy quy mô lớn, hãy nâng cấp lên Supabase.
                    </p>
                 </div>
              </div>
