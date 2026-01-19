@@ -1,5 +1,6 @@
 
 {
+  "type": "module",
   "name": "otpsim-web",
   "version": "1.0.0",
   "description": "Nền tảng thuê SIM OTP",
