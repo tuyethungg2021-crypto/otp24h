@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { ToastType } from '../App';
+import { ToastType } from '../types.ts';
 
 interface ToastProps {
   message: string;
