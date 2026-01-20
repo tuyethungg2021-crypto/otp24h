@@ -1,6 +1,6 @@
 
 {
-  "type": "module",
+  import http from 'node:http';
   "name": "otpsim-web",
   "version": "1.0.0",
   "description": "Nền tảng thuê SIM OTP",
