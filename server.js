@@ -111,12 +111,26 @@ function normalizeName(name) {
 }
 
 async function getJson(url) {
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Accept": "application/json, text/plain, */*",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
+    }
+  });
+
   const text = await response.text();
+
   try {
     return JSON.parse(text);
   } catch {
-    return { error: true, message: "API trả về dữ liệu không hợp lệ", raw: text };
+    return {
+      error: true,
+      httpStatus: response.status,
+      contentType: response.headers.get("content-type"),
+      message: "API trả về dữ liệu không hợp lệ",
+      rawPreview: text.slice(0, 500)
+    };
   }
 }
 
@@ -464,6 +478,18 @@ app.get("/api/provider/account", requireAdmin, async (req, res) => {
 });
 
 
+app.get("/api/test-codesim-services", async (req, res) => {
+  const api = await callCodesim("/service/get_service_by_api_key");
+  res.json({
+    status: api.status || api.httpStatus || null,
+    message: api.message || api.Msg || "",
+    count: Array.isArray(api.data) ? api.data.length : 0,
+    first: Array.isArray(api.data) ? api.data.slice(0, 5) : null,
+    rawPreview: api.rawPreview || "",
+    rawShape: api ? Object.keys(api) : []
+  });
+});
+
 app.get("/api/source-status", async (req, res) => {
   const [chayApps, codesimApps, chayAccount, codesimAccount] = await Promise.allSettled([
     callChay({ act: "app" }),
@@ -499,7 +525,8 @@ app.get("/api/source-status", async (req, res) => {
       accountMessage: codesimAccountValue?.message || codesimAccountValue?.Msg || "",
       appMessage: codesimAppValue?.message || codesimAppValue?.Msg || "",
       appStatus: codesimAppValue?.status ?? codesimAppValue?.ResponseCode ?? null,
-      rawShape: codesimAppValue ? Object.keys(codesimAppValue) : []
+      rawShape: codesimAppValue ? Object.keys(codesimAppValue) : [],
+      rawPreview: codesimAppValue?.rawPreview || ""
     }
   });
 });
