@@ -105,7 +105,7 @@ function normalizeName(name) {
   return String(name || "")
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\\u0300-\\u036f]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, "")
     .trim();
 }
@@ -197,7 +197,16 @@ async function getAllSources() {
   }
 
   if (codesim.status === "fulfilled" && isCodesimOk(codesim.value)) {
-    for (const raw of codesim.value.data || []) sources.push(serviceFromCodesim(raw));
+    const codesimList =
+      Array.isArray(codesim.value.data) ? codesim.value.data :
+      Array.isArray(codesim.value.Result) ? codesim.value.Result :
+      Array.isArray(codesim.value.result) ? codesim.value.result :
+      Array.isArray(codesim.value.data?.data) ? codesim.value.data.data :
+      [];
+    for (const raw of codesimList) sources.push(serviceFromCodesim(raw));
+    if (codesimList.length === 0) {
+      errors.push({ provider: "codesim", error: { message: "Codesim trả về thành công nhưng danh sách dịch vụ rỗng", raw: codesim.value } });
+    }
   } else {
     errors.push({ provider: "codesim", error: codesim.status === "fulfilled" ? codesim.value : String(codesim.reason) });
   }
@@ -468,10 +477,36 @@ app.get("/api/admin/services", requireAdmin, async (req, res) => {
 
   if (sources.length === 0) return res.status(502).json({ message: "Không tải được dịch vụ từ cả 2 nguồn", errors });
 
+  const decoratedSources = sources.map(s => applyOverride(s, req.data.serviceOverrides));
   res.json({
     merged: mergeServices(sources, req.data.serviceOverrides, true),
-    sources: sources.map(s => applyOverride(s, req.data.serviceOverrides)),
-    errors
+    sources: decoratedSources,
+    errors,
+    counts: {
+      chaycodeso3: decoratedSources.filter(s => s.provider === "chaycodeso3").length,
+      codesim: decoratedSources.filter(s => s.provider === "codesim").length,
+      total: decoratedSources.length
+    }
+  });
+});
+
+app.get("/api/admin/provider-debug", requireAdmin, async (req, res) => {
+  const [chayApps, codesimApps, chayAccount, codesimAccount] = await Promise.allSettled([
+    callChay({ act: "app" }),
+    callCodesim("/service/get_service_by_api_key"),
+    callChay({ act: "account" }),
+    callCodesim("/yourself/information-by-api-key")
+  ]);
+
+  res.json({
+    chaycodeso3: {
+      apps: chayApps.status === "fulfilled" ? chayApps.value : { error: String(chayApps.reason) },
+      account: chayAccount.status === "fulfilled" ? chayAccount.value : { error: String(chayAccount.reason) }
+    },
+    codesim: {
+      apps: codesimApps.status === "fulfilled" ? codesimApps.value : { error: String(codesimApps.reason) },
+      account: codesimAccount.status === "fulfilled" ? codesimAccount.value : { error: String(codesimAccount.reason) }
+    }
   });
 });
 

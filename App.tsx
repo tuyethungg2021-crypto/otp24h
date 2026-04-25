@@ -24,6 +24,8 @@ export default function App() {
   const [users, setUsers] = useState<User[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [adminServices, setAdminServices] = useState<Service[]>([]);
+  const [providerErrors, setProviderErrors] = useState<any[]>([]);
+  const [providerCounts, setProviderCounts] = useState<any>({});
   const [orders, setOrders] = useState<Order[]>([]);
   const [topups, setTopups] = useState<Topup[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
@@ -69,8 +71,14 @@ export default function App() {
     if (res.ok) {
       const data = await res.json();
       setAdminServices(Array.isArray(data) ? data : (data.sources || []));
+      setProviderErrors(data.errors || []);
+      setProviderCounts(data.counts || {});
+      if (data.errors && data.errors.length > 0) {
+        show("Có nguồn API lỗi, xem thông báo trong Quản lý dịch vụ");
+      }
     } else {
-      show("Không tải được dịch vụ admin");
+      const err = await res.json().catch(() => ({}));
+      show(err.message || "Không tải được dịch vụ admin");
     }
   };
 
@@ -384,8 +392,28 @@ export default function App() {
         {tab === "adminServices" && isAdmin && <Panel title="Quản lý dịch vụ theo từng nguồn">
           <div className="flex flex-col md:flex-row gap-3 mb-4"><button onClick={loadAdminServices} className="bg-slate-900 text-white rounded-2xl px-5 py-3 font-bold">Tải dịch vụ API</button><button onClick={() => bulkSetHidden(true, false)} disabled={busy} className="bg-rose-600 text-white rounded-2xl px-5 py-3 font-bold">Ẩn tất cả</button><button onClick={() => bulkSetHidden(false, true)} disabled={busy} className="bg-emerald-600 text-white rounded-2xl px-5 py-3 font-bold">Hiện dịch vụ đang tìm</button><button onClick={() => bulkSetHidden(true, true)} disabled={busy} className="bg-amber-500 text-white rounded-2xl px-5 py-3 font-bold">Ẩn dịch vụ đang tìm</button></div>
           <input value={adminServiceSearch} onChange={e => setAdminServiceSearch(e.target.value)} className="w-full border rounded-2xl px-5 py-4 mb-4" placeholder="Tìm dịch vụ, nguồn hoặc ID..." />
+
+          <div className="grid md:grid-cols-3 gap-3 mb-4">
+            <div className="bg-slate-100 rounded-2xl p-4"><b>Tổng nguồn</b><p className="text-2xl font-black">{providerCounts.total || adminServices.length}</p></div>
+            <div className="bg-blue-50 rounded-2xl p-4"><b>Chaycodeso3</b><p className="text-2xl font-black">{providerCounts.chaycodeso3 || 0}</p></div>
+            <div className="bg-emerald-50 rounded-2xl p-4"><b>Codesim</b><p className="text-2xl font-black">{providerCounts.codesim || 0}</p></div>
+          </div>
+
+          {providerErrors.length > 0 && (
+            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 mb-4">
+              <b className="text-rose-700">Có nguồn API đang lỗi:</b>
+              <div className="mt-2 space-y-2 text-sm">
+                {providerErrors.map((e, i) => (
+                  <div key={i}>
+                    <b>{e.provider}</b>: {e.error?.message || e.error?.Msg || JSON.stringify(e.error).slice(0, 250)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="mb-4 text-sm text-slate-500">Đang hiển thị <b>{filteredAdminServices.length}</b>/<b>{adminServices.length}</b> nguồn dịch vụ. Một dịch vụ có thể có 2 nguồn: chaycodeso3 và codesim.</div>
-          <div className="space-y-3">{filteredAdminServices.map(s => <div key={s.id} className={`border rounded-2xl p-4 grid md:grid-cols-6 gap-3 items-center ${s.hidden ? "bg-rose-50 border-rose-200" : "bg-white"}`}><div><b>{s.originalName}</b><p className="text-xs text-slate-500">Nguồn {s.provider} | ID {s.providerId || s.id} | API {s.providerCost}đ</p><p className={`text-xs font-bold mt-1 ${s.hidden ? "text-rose-600" : "text-emerald-600"}`}>{s.hidden ? "Đang ẩn" : "Đang hiện"}</p></div><input defaultValue={s.name} onBlur={e => saveService(s, { name: e.target.value })} className="border rounded-xl px-3 py-2" placeholder="Tên hiển thị" /><input defaultValue={s.price} onBlur={e => saveService(s, { price: Number(e.target.value) })} className="border rounded-xl px-3 py-2" placeholder="Giá bán" /><input defaultValue={s.note || ""} onBlur={e => saveService(s, { note: e.target.value })} className="border rounded-xl px-3 py-2" placeholder="Chú thích" /><label className="flex gap-2 items-center font-bold"><input type="checkbox" defaultChecked={s.hidden} onChange={e => saveService(s, { hidden: e.target.checked })} />Ẩn</label><button onClick={() => saveService(s, { hidden: !s.hidden })} className={`${s.hidden ? "bg-emerald-600" : "bg-rose-600"} text-white rounded-xl px-3 py-2 font-bold`}>{s.hidden ? "Bỏ ẩn" : "Ẩn"}</button></div>)}</div>
+          <div className="space-y-3">{filteredAdminServices.map(s => <div key={s.id} className={`border rounded-2xl p-4 grid md:grid-cols-6 gap-3 items-center ${s.hidden ? "bg-rose-50 border-rose-200" : "bg-white"}`}><div><b>{s.originalName}</b><p className="text-xs text-slate-500">Nguồn {s.provider} | ID {s.providerId || s.id} | API {s.providerCost}đ</p><p className={`text-xs font-bold mt-1 ${s.hidden ? "text-rose-600" : "text-emerald-600"}`}>{s.hidden ? "Đang ẩn" : "Đang hiện"}</p></div><input defaultValue={s.name} onBlur={e => saveService(s, { name: e.target.value })} className="border rounded-xl px-3 py-2" placeholder="Tên hiển thị" /><input defaultValue={s.price} onBlur={e => saveService(s, { price: Number(e.target.value) })} className="border rounded-xl px-3 py-2" placeholder="Giá bán" /><input defaultValue={s.note || ""} onBlur={e => saveService(s, { note: e.target.value })} className="border rounded-xl px-3 py-2" placeholder="Chú thích" /><label className="flex gap-2 items-center font-bold"><input type="checkbox" checked={s.hidden} onChange={e => saveService(s, { hidden: e.target.checked })} />Ẩn</label><button onClick={() => saveService(s, { hidden: !s.hidden })} className={`${s.hidden ? "bg-emerald-600" : "bg-rose-600"} text-white rounded-xl px-3 py-2 font-bold`}>{s.hidden ? "Bỏ ẩn" : "Ẩn"}</button></div>)}</div>
         </Panel>}
 
         {tab === "settings" && isAdmin && <Panel title="Cài đặt giao diện">
