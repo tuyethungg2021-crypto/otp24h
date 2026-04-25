@@ -1,58 +1,112 @@
-require http from 'node:http';
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
+import express from "express";
+import cors from "cors";
+import fs from "fs";
+import path from "path";
 
-const port = process.env.PORT || 3000;
+const app = express();
+const PORT = process.env.PORT || 10000;
+const USERS_FILE = "./users.json";
 
-const server = http.createServer((req, res) => {
-  // Đường dẫn tệp tin
-  let filePath = '.' + req.url;
-  if (filePath === './') {
-    filePath = './index.html';
+app.use(cors());
+app.use(express.json());
+
+function readUsers() {
+  if (!fs.existsSync(USERS_FILE)) {
+    fs.writeFileSync(USERS_FILE, JSON.stringify([
+      {
+        id: "admin",
+        username: "admin",
+        password: "admin123",
+        role: "admin",
+        balance: 0
+      }
+    ], null, 2));
   }
 
-  const extname = String(path.extname(filePath)).toLowerCase();
-  const mimeTypes = {
-    '.html': 'text/html',
-    '.js': 'text/javascript',
-    '.css': 'text/css',
-    '.json': 'application/json',
-    '.png': 'image/png',
-    '.jpg': 'image/jpg',
-    '.gif': 'image/gif',
-    '.svg': 'image/svg+xml',
-    '.wav': 'audio/wav',
-    '.mp4': 'video/mp4',
-    '.woff': 'application/font-woff',
-    '.ttf': 'application/font-ttf',
-    '.eot': 'application/vnd.ms-fontobject',
-    '.otf': 'application/font-otf',
-    '.wasm': 'application/wasm'
+  return JSON.parse(fs.readFileSync(USERS_FILE, "utf8"));
+}
+
+function writeUsers(users) {
+  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+}
+
+app.post("/api/register", (req, res) => {
+  const { username, password } = req.body;
+
+  if (!username || !password) {
+    return res.status(400).json({ message: "Thiếu username hoặc password" });
+  }
+
+  const users = readUsers();
+
+  const existed = users.find(u => u.username === username);
+  if (existed) {
+    return res.status(409).json({ message: "Tài khoản đã tồn tại" });
+  }
+
+  const newUser = {
+    id: "u-" + Date.now(),
+    username,
+    password,
+    role: "user",
+    balance: 0
   };
 
-  const contentType = mimeTypes[extname] || 'application/octet-stream';
+  users.push(newUser);
+  writeUsers(users);
 
-  fs.readFile(filePath, (error, content) => {
-    if (error) {
-      if (error.code == 'ENOENT') {
-        // Nếu không tìm thấy tệp, trả về index.html (hỗ trợ Single Page App)
-        fs.readFile('./index.html', (error, content) => {
-          res.writeHead(200, { 'Content-Type': 'text/html' });
-          res.end(content, 'utf-8');
-        });
-      } else {
-        res.writeHead(500);
-        res.end('Sorry, check with the site admin for error: ' + error.code + ' ..\n');
-        res.end();
-      }
-    } else {
-      res.writeHead(200, { 'Content-Type': contentType });
-      res.end(content, 'utf-8');
-    }
-  });
+  res.json(newUser);
 });
 
-server.listen(port, () => {
-  console.log(`Server running at port ${port}`);
+app.post("/api/login", (req, res) => {
+  const { username, password } = req.body;
+  const users = readUsers();
+
+  const user = users.find(u => u.username === username && u.password === password);
+
+  if (!user) {
+    return res.status(401).json({ message: "Sai tài khoản hoặc mật khẩu" });
+  }
+
+  res.json(user);
+});
+
+app.get("/api/users", (req, res) => {
+  res.json(readUsers());
+});
+
+app.put("/api/users/:id", (req, res) => {
+  const users = readUsers();
+  const index = users.findIndex(u => u.id === req.params.id);
+
+  if (index === -1) {
+    return res.status(404).json({ message: "Không tìm thấy user" });
+  }
+
+  users[index] = {
+    ...users[index],
+    ...req.body
+  };
+
+  writeUsers(users);
+  res.json(users[index]);
+});
+
+app.delete("/api/users/:id", (req, res) => {
+  const users = readUsers();
+  const newUsers = users.filter(u => u.id !== req.params.id);
+
+  writeUsers(newUsers);
+  res.json({ success: true });
+});
+
+const distPath = path.resolve("dist");
+app.use(express.static(distPath));
+
+app.get("*", (req, res) => {
+  res.sendFile(path.join(distPath, "index.html"));
+});
+
+app.listen(PORT, () => {
+  console.log("Server running on port " + PORT);
 });
