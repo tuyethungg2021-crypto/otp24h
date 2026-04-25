@@ -69,53 +69,20 @@ const App: React.FC = () => {
       const defaultAdmin: User = { id: 'admin-1', username: 'admin', password: 'hung0385601880', role: 'admin', balance: 0 };
       currentUsers = [defaultAdmin];
     }
+    fetch('/api/users')
+  .then(res => res.json())
+  .then((currentUsers) => {
     setAllUsers(currentUsers);
 
     const savedSessionId = localStorage.getItem('otpsim_session_userid');
     if (savedSessionId) {
       const found = currentUsers.find(u => u.id === savedSessionId);
-      if (found) {
-        setUser(found);
-      }
+      if (found) setUser(found);
     }
-
-    const savedOrders = localStorage.getItem('otpsim_orders');
-    if (savedOrders) setOrders(JSON.parse(savedOrders));
-
-    const savedTopups = localStorage.getItem('otpsim_topups');
-    if (savedTopups) setTopupRequests(JSON.parse(savedTopups));
-
-    const savedProducts = localStorage.getItem('otpsim_products');
-    if (savedProducts) setProducts(JSON.parse(savedProducts));
-
-    const savedPurchases = localStorage.getItem('otpsim_purchases');
-    if (savedPurchases) setPurchases(JSON.parse(savedPurchases));
-  }, []);
-
+  })
+  .catch(() => showToast('Không tải được danh sách user', 'error'));
   useEffect(() => {
-    localStorage.setItem('otpsim_orders', JSON.stringify(orders));
-  }, [orders]);
-
-  useEffect(() => {
-    localStorage.setItem('otpsim_topups', JSON.stringify(topupRequests));
-  }, [topupRequests]);
-
-  useEffect(() => {
-    localStorage.setItem('otpsim_users', JSON.stringify(allUsers));
-  }, [allUsers]);
-
-  useEffect(() => {
-    localStorage.setItem('otpsim_products', JSON.stringify(products));
-  }, [products]);
-
-  useEffect(() => {
-    localStorage.setItem('otpsim_purchases', JSON.stringify(purchases));
-  }, [purchases]);
-
-  const saveConfig = (newConfig: SiteConfig) => {
-    setSiteConfig(newConfig);
-    localStorage.setItem('otpsim_config', JSON.stringify(newConfig));
-    showToast("Cấu hình hệ thống đã được lưu!");
+   
     if (user) initData();
   };
 
@@ -137,32 +104,27 @@ const App: React.FC = () => {
   };
 
   const initData = async () => {
-    if (!user) return;
-    setLoading(true);
-    try {
-      if (user.role === 'admin') {
-        try {
-          const accRes = await otpApi.getAccountInfo(siteConfig.masterApiKey);
-          const data = accRes.data ?? accRes;
-          if (data && data.balance !== undefined) setBalance(data.balance);
-        } catch (e) { 
-          console.warn("Không thể lấy ví tổng: ", e);
-        }
-      } else {
-        const freshUser = allUsers.find(u => u.id === user.id);
-        if (freshUser) setBalance(freshUser.balance);
-      }
-      
-      const servRes = await otpApi.getServices(siteConfig.masterApiKey);
-      let servicesData: SimService[] = [];
-      if (Array.isArray(servRes)) servicesData = servRes;
-      else if (servRes && Array.isArray(servRes.data)) servicesData = servRes.data;
+    const handleRegister = async (username: string, pass: string) => {
+  try {
+    const res = await fetch('/api/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password: pass })
+    });
 
-      if (servicesData.length > 0) {
-        const updatedServices = servicesData.map((s: SimService) => {
-          const originalPrice = s.price || 0;
-          const customPrice = siteConfig.customPrices[s.id];
-          const finalPrice = customPrice !== undefined 
+    const data = await res.json();
+
+    if (!res.ok) {
+      showToast(data.message || 'Đăng ký thất bại!', 'error');
+      return;
+    }
+
+    setAllUsers(prev => [...prev, data]);
+    showToast('Đăng ký thành công!');
+  } catch {
+    showToast('Lỗi server!', 'error');
+  }
+};
             ? customPrice 
             : Math.round(originalPrice * siteConfig.globalMarkup);
             
@@ -197,47 +159,35 @@ const App: React.FC = () => {
       setBalance(prev => prev + amount);
       setUser(prevUser => prevUser ? { ...prevUser, balance: (prevUser.balance || 0) + amount } : null);
     }
-    if (amount > 0) showToast(`Đã cộng ${amount.toLocaleString()}đ vào ví.`);
-    else if (amount < 0) showToast(`Đã trừ ${Math.abs(amount).toLocaleString()}đ khỏi ví.`, 'info');
-  };
+    onLogin={async (u, p, remember) => {
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: u, password: p })
+    });
 
-  // Logic Mua Hàng Cửa Hàng
-  const handleBuyProduct = (product: MarketProduct) => {
-    if (!user) return;
-    if (balance < product.price) {
-      showToast("Số dư không đủ! Vui lòng nạp thêm tiền.", 'error');
-      setActiveTab('topup');
+    const found = await res.json();
+
+    if (!res.ok) {
+      showToast(found.message || 'Sai tài khoản!', 'error');
       return;
     }
-    if (product.items.length === 0) {
-      showToast("Sản phẩm này đã hết hàng!", 'error');
-      return;
+
+    setUser(found);
+    setActiveTab('dashboard');
+
+    if (remember) {
+      localStorage.setItem('otpsim_session_userid', found.id);
+    } else {
+      localStorage.removeItem('otpsim_session_userid');
     }
 
-    const boughtItem = product.items[0];
-    const remainingItems = product.items.slice(1);
-
-    // 1. Cập nhật kho hàng
-    setProducts(prev => prev.map(p => p.id === product.id ? { ...p, items: remainingItems } : p));
-    
-    // 2. Trừ tiền
-    handleUpdateBalance(user.id, -product.price);
-
-    // 3. Lưu lịch sử
-    const newPurchase: MarketPurchase = {
-      id: 'pur-' + Date.now(),
-      userId: user.id,
-      productId: product.id,
-      productName: product.name,
-      content: boughtItem,
-      price: product.price,
-      createdAt: Date.now()
-    };
-    setPurchases(prev => [newPurchase, ...prev]);
-    
-    showToast(`Mua thành công ${product.name}! Kiểm tra tab "Đồ đã mua".`);
-  };
-
+    showToast(`Chào ${found.username}`);
+  } catch {
+    showToast('Lỗi server!', 'error');
+  }
+}}
   const handleSubmitTopup = (amount: number, method: 'BANK' | 'MOMO', content: string) => {
     if (!user) return;
     const newRequest: TopupRequest = {
