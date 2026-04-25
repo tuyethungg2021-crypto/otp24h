@@ -313,6 +313,27 @@ app.delete("/api/users/:id", requireAdmin, async (req, res) => {
   res.json({ success: true });
 });
 
+app.get("/api/user-stats", requireAdmin, async (req, res) => {
+  const data = req.data;
+
+  const stats = data.users.map(user => {
+    const approvedTopups = data.topups.filter(t => t.userId === user.id && t.status === "approved");
+    const usedOrders = data.orders.filter(o => o.userId === user.id && o.status !== "canceled" && !(o.status === "expired" && o.refunded));
+
+    const totalTopup = approvedTopups.reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    const totalUsed = usedOrders.reduce((sum, o) => sum + Number(o.price || 0), 0);
+
+    return {
+      ...publicUser(user),
+      totalTopup,
+      totalUsed,
+      balance: Number(user.balance || 0)
+    };
+  });
+
+  res.json(stats);
+});
+
 app.get("/api/provider/account", requireAdmin, async (req, res) => {
   res.json({
     chaycodeso3: await callChay({ act: "account" }),
@@ -420,6 +441,7 @@ app.post("/api/orders", async (req, res) => {
     status: "waiting",
     code: "",
     sms: "",
+    refunded: false,
     createdAt: new Date().toISOString()
   };
 
@@ -453,6 +475,14 @@ app.post("/api/orders/:id/check-code", async (req, res) => {
     order.callFile = api.Result?.CallFile || "";
   } else if (api.ResponseCode === 2) {
     order.status = "expired";
+
+    if (!order.refunded) {
+      const user = data.users.find(u => u.id === order.userId);
+      if (user) user.balance = Number(user.balance || 0) + Number(order.price || 0);
+      order.refunded = true;
+      order.refundedAt = new Date().toISOString();
+      order.refundReason = "expired_no_otp";
+    }
   }
 
   await writeData(data);
@@ -469,8 +499,13 @@ app.post("/api/orders/:id/cancel", async (req, res) => {
   const api = await callChay({ act: "expired", id: order.providerQueueId });
 
   if (api.ResponseCode === 0) {
-    const user = data.users.find(u => u.id === order.userId);
-    if (user) user.balance = Number(user.balance || 0) + Number(order.price || 0);
+    if (!order.refunded) {
+      const user = data.users.find(u => u.id === order.userId);
+      if (user) user.balance = Number(user.balance || 0) + Number(order.price || 0);
+      order.refunded = true;
+      order.refundedAt = new Date().toISOString();
+      order.refundReason = "user_cancel";
+    }
     order.status = "canceled";
   }
 

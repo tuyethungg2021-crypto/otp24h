@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-type User = { id: string; username: string; role: "admin" | "user"; balance: number };
+type User = { id: string; username: string; role: "admin" | "user"; balance: number; totalTopup?: number; totalUsed?: number };
 type Service = { id: string; sourceKey?: string; provider?: string; providerId?: number; originalName: string; name: string; providerCost: number; price: number; hidden: boolean; note?: string };
-type Order = { id: string; appName: string; number: string; price: number; status: string; code?: string; sms?: string; createdAt: string; provider?: string; carrier?: string };
+type Order = { id: string; userId?: string; appName: string; number: string; price: number; status: string; code?: string; sms?: string; createdAt: string; provider?: string; carrier?: string; refunded?: boolean; refundReason?: string };
 type Settings = { siteName: string; logoText: string; background: string; announcement: string; bannerImage: string; bankName: string; bankAccountNumber: string; bankBeneficiary: string; bankQrUrl: string; topupNote: string };
 type Topup = { id: string; userId: string; username: string; amount: number; note?: string; status: string; createdAt: string };
 
@@ -73,7 +73,7 @@ export default function App() {
 
   const loadUsers = async () => {
     if (!user || !isAdmin) return;
-    const res = await fetch("/api/users", { headers });
+    const res = await fetch("/api/user-stats", { headers });
     if (res.ok) setUsers(await res.json());
   };
 
@@ -115,6 +115,27 @@ export default function App() {
       loadAdminServices();
     }
   }, [user, tab]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const timer = setInterval(async () => {
+      const latest = await fetch(`/api/orders?userId=${user.id}`);
+      if (!latest.ok) return;
+
+      const list: Order[] = await latest.json();
+      const waiting = list.filter(o => o.status === "waiting");
+
+      for (const order of waiting) {
+        await fetch(`/api/orders/${order.id}/check-code`, { method: "POST" });
+      }
+
+      const after = await fetch(`/api/orders?userId=${user.id}`);
+      if (after.ok) setOrders(await after.json());
+    }, 5000);
+
+    return () => clearInterval(timer);
+  }, [user]);
 
   const login = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -173,7 +194,9 @@ export default function App() {
     const data = await res.json();
     if (!res.ok) return show(data.message || "Không check được code");
     await loadOrders();
-    show(data.api?.Msg || data.api?.message || "Đã check code");
+    if (data.order?.status === "expired" && data.order?.refunded) show("Số đã hết hạn, hệ thống đã hoàn tiền");
+    else if (data.order?.code) show("Đã có OTP");
+    else show(data.api?.Msg || data.api?.message || "Đang chờ OTP");
   };
 
   const cancelOrder = async (order: Order) => {
@@ -181,7 +204,7 @@ export default function App() {
     const data = await res.json();
     if (!res.ok) return show(data.message || "Không hủy được");
     await loadOrders();
-    show(data.api?.Msg || data.api?.message || "Đã hủy");
+    show(data.order?.refunded ? "Đã hủy và hoàn tiền" : "Đã hủy");
   };
 
   const adjustBalance = async (target: User) => {
@@ -293,7 +316,7 @@ export default function App() {
   };
 
   const filteredServices = useMemo(() => services.filter(s => s.name.toLowerCase().includes(search.toLowerCase())), [services, search]);
-  const waitingOrders = orders.filter(o => o.status === "waiting");
+  const activeOrders = orders.filter(o => o.status === "waiting" || (o.status === "done" && o.code));
   const filteredAdminServices = useMemo(() => adminServices.filter(s => `${s.originalName} ${s.name} ${s.id} ${s.provider || ""}`.toLowerCase().includes(adminServiceSearch.toLowerCase())), [adminServices, adminServiceSearch]);
 
   if (!user) {
@@ -345,16 +368,16 @@ export default function App() {
         <div className="grid md:grid-cols-3 gap-5 mb-6">
           <Card title="Tài khoản" value={user.username} />
           <Card title="Vai trò" value={user.role} />
-          <Card title="Số dư" value={`${user.balance.toLocaleString("vi-VN")}đ`} />
+          <Card title="Số dư còn lại" value={`${user.balance.toLocaleString("vi-VN")}đ`} />
         </div>
 
-        {waitingOrders.length > 0 && (
+        {!isAdmin && activeOrders.length > 0 && (
           <div className="mb-6 bg-indigo-600 text-white rounded-3xl p-6 shadow-xl">
-            <div className="flex items-center justify-between mb-4"><h2 className="text-2xl font-black">📱 Số đang chờ OTP</h2><button onClick={loadOrders} className="bg-white/20 rounded-xl px-4 py-2 font-bold">Tải lại</button></div>
-            <div className="space-y-3">{waitingOrders.map(o => (
+            <div className="flex items-center justify-between mb-4"><h2 className="text-2xl font-black">📱 Sim đang thuê / chờ OTP</h2><button onClick={loadOrders} className="bg-white/20 rounded-xl px-4 py-2 font-bold">Tải lại</button></div>
+            <div className="space-y-3">{activeOrders.map(o => (
               <div key={o.id} className="bg-white/15 rounded-2xl p-4 flex flex-col md:flex-row md:justify-between md:items-center gap-4">
-                <div><div className="text-3xl font-black tracking-wide">{o.number}</div><div className="text-sm opacity-90 mt-1">Dịch vụ: {o.appName} | Nhà mạng: {o.carrier || "Tất cả"} | Giá: {o.price.toLocaleString("vi-VN")}đ</div>{o.sms && <div className="mt-2 text-sm">SMS: {o.sms}</div>}</div>
-                <div className="flex gap-2"><button onClick={() => checkCode(o)} className="bg-white text-indigo-700 rounded-xl px-4 py-2 font-black">Check OTP</button><button onClick={() => cancelOrder(o)} className="bg-rose-600 text-white rounded-xl px-4 py-2 font-black">Hủy</button></div>
+                <div><div className="text-3xl font-black tracking-wide">{o.number}</div><div className="text-sm opacity-90 mt-1">Dịch vụ: {o.appName} | Nhà mạng: {o.carrier || "Tất cả"} | Giá: {o.price.toLocaleString("vi-VN")}đ</div>{o.code ? <div className="mt-3 bg-white text-indigo-700 rounded-xl px-4 py-3 text-2xl font-black inline-block">OTP: {o.code}</div> : <div className="mt-2 text-sm">Đang tự động chờ OTP...</div>}{o.sms && <div className="mt-2 text-sm">SMS: {o.sms}</div>}</div>
+                <div className="flex gap-2">{o.status === "waiting" && <button onClick={() => cancelOrder(o)} className="bg-rose-600 text-white rounded-xl px-4 py-2 font-black">Hủy hoàn tiền</button>}</div>
               </div>
             ))}</div>
           </div>
@@ -383,11 +406,27 @@ export default function App() {
           </div>
         </section>}
 
-        {tab === "orders" && <Panel title="Lịch sử thuê">
-          <div className="space-y-3">{orders.map(o => <div key={o.id} className="border rounded-2xl p-4 flex justify-between items-center">
-            <div><b>{o.appName}</b> - {o.number}<p className="text-sm text-slate-500">Nhà mạng: {o.carrier || "Tất cả"} | Trạng thái: {o.status} | Giá: {o.price.toLocaleString("vi-VN")}đ</p>{o.code && <p className="text-green-600 font-black">Code: {o.code}</p>}{o.sms && <p className="text-sm">{o.sms}</p>}</div>
-            <div className="flex gap-2"><button onClick={() => checkCode(o)} className="bg-indigo-600 text-white rounded-xl px-4 py-2 font-bold">Check code</button>{o.status === "waiting" && <button onClick={() => cancelOrder(o)} className="bg-rose-600 text-white rounded-xl px-4 py-2 font-bold">Hủy</button>}</div>
-          </div>)}</div>
+        {tab === "orders" && <Panel title={isAdmin ? "Lịch sử giao dịch toàn hệ thống" : "Lịch sử thuê"}>
+          <div className="space-y-3">{orders.map(o => {
+            const orderUser = users.find(u => u.id === o.userId);
+            return (
+              <div key={o.id} className="border rounded-2xl p-4 flex flex-col md:flex-row md:justify-between md:items-center gap-4">
+                <div>
+                  <b>{o.appName}</b> - {o.number}
+                  <p className="text-sm text-slate-500">
+                    {isAdmin && <>User: <b>{orderUser?.username || o.userId || "Không rõ"}</b> | </>}
+                    Thời gian: {new Date(o.createdAt).toLocaleString("vi-VN")} | Nhà mạng: {o.carrier || "Tất cả"} | Trạng thái: {o.status} | Giá: {o.price.toLocaleString("vi-VN")}đ
+                  </p>
+                  {o.refunded && <p className="text-rose-600 font-bold">Đã hoàn tiền: {o.refundReason === "expired_no_otp" ? "Hết hạn không có OTP" : "Khách hủy"}</p>}
+                  {o.code && <p className="text-green-600 font-black">OTP: {o.code}</p>}
+                  {o.sms && <p className="text-sm">{o.sms}</p>}
+                </div>
+                <div className="flex gap-2">
+                  {o.status === "waiting" && !isAdmin && <button onClick={() => cancelOrder(o)} className="bg-rose-600 text-white rounded-xl px-4 py-2 font-bold">Hủy hoàn tiền</button>}
+                </div>
+              </div>
+            );
+          })}</div>
         </Panel>}
 
         {tab === "topup" && <Panel title="Nạp tiền">
@@ -403,8 +442,8 @@ export default function App() {
         </Panel>}
 
         {tab === "users" && isAdmin && <Panel title="Quản lý user">
-          <table className="w-full text-left"><thead><tr className="border-b"><th className="py-3">User</th><th>Role</th><th>Số dư</th><th>Hành động</th></tr></thead><tbody>
-            {users.map(u => <tr key={u.id} className="border-b"><td className="py-4 font-bold">{u.username}</td><td>{u.role}</td><td>{u.balance.toLocaleString("vi-VN")}đ</td><td className="flex gap-2 py-3"><button onClick={() => adjustBalance(u)} className="bg-indigo-600 text-white rounded-xl px-3 py-2 text-sm font-bold">Cộng/trừ</button><button onClick={() => changeUserPass(u)} className="bg-amber-500 text-white rounded-xl px-3 py-2 text-sm font-bold">Đổi pass</button><button onClick={() => deleteUser(u)} className="bg-rose-600 text-white rounded-xl px-3 py-2 text-sm font-bold">Xóa</button></td></tr>)}
+          <table className="w-full text-left"><thead><tr className="border-b"><th className="py-3">User</th><th>Role</th><th>Đã nạp</th><th>Đã dùng</th><th>Còn lại</th><th>Hành động</th></tr></thead><tbody>
+            {users.map(u => <tr key={u.id} className="border-b"><td className="py-4 font-bold">{u.username}</td><td>{u.role}</td><td>{Number(u.totalTopup || 0).toLocaleString("vi-VN")}đ</td><td>{Number(u.totalUsed || 0).toLocaleString("vi-VN")}đ</td><td className="font-black text-indigo-600">{u.balance.toLocaleString("vi-VN")}đ</td><td className="flex gap-2 py-3"><button onClick={() => adjustBalance(u)} className="bg-indigo-600 text-white rounded-xl px-3 py-2 text-sm font-bold">Cộng/trừ</button><button onClick={() => changeUserPass(u)} className="bg-amber-500 text-white rounded-xl px-3 py-2 text-sm font-bold">Đổi pass</button><button onClick={() => deleteUser(u)} className="bg-rose-600 text-white rounded-xl px-3 py-2 text-sm font-bold">Xóa</button></td></tr>)}
           </tbody></table>
         </Panel>}
 
