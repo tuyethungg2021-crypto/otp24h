@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 type User = { id: string; username: string; role: "admin" | "user"; balance: number };
-type Service = { id: string; sourceKey?: string; provider?: string; originalName: string; name: string; providerCost: number; price: number; hidden: boolean; note?: string; sources?: any[]; bestProvider?: string; bestSourceKey?: string };
-type Order = { id: string; appName: string; number: string; price: number; status: string; code?: string; sms?: string; createdAt: string; provider?: string };
+type Service = { id: string; sourceKey?: string; provider?: string; providerId?: number; originalName: string; name: string; providerCost: number; price: number; hidden: boolean; note?: string };
+type Order = { id: string; appName: string; number: string; price: number; status: string; code?: string; sms?: string; createdAt: string; provider?: string; carrier?: string };
 type Settings = { siteName: string; logoText: string; background: string; announcement: string; bannerImage: string; bankName: string; bankAccountNumber: string; bankBeneficiary: string; bankQrUrl: string; topupNote: string };
 type Topup = { id: string; userId: string; username: string; amount: number; note?: string; status: string; createdAt: string };
 
@@ -19,13 +19,20 @@ const defaultSettings: Settings = {
   topupNote: "Nội dung chuyển khoản: username của bạn. Sau khi chuyển khoản hãy tạo yêu cầu nạp tiền để admin duyệt."
 };
 
+const carriers = [
+  { label: "Tất cả nhà mạng", value: "" },
+  { label: "Viettel", value: "Viettel" },
+  { label: "Mobi", value: "Mobi" },
+  { label: "Vina", value: "Vina" },
+  { label: "VNMB", value: "VNMB" },
+  { label: "ITelecom", value: "ITelecom" }
+];
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [adminServices, setAdminServices] = useState<Service[]>([]);
-  const [providerErrors, setProviderErrors] = useState<any[]>([]);
-  const [providerCounts, setProviderCounts] = useState<any>({});
   const [orders, setOrders] = useState<Order[]>([]);
   const [topups, setTopups] = useState<Topup[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
@@ -36,9 +43,11 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [search, setSearch] = useState("");
   const [adminServiceSearch, setAdminServiceSearch] = useState("");
+  const [selectedCarrier, setSelectedCarrier] = useState("");
   const [busy, setBusy] = useState(false);
   const [topupAmount, setTopupAmount] = useState("");
   const [topupNote, setTopupNote] = useState("");
+  const [providerCounts, setProviderCounts] = useState<any>({});
 
   const headers = user ? { "Content-Type": "application/json", "x-user-id": user.id } : { "Content-Type": "application/json" };
   const isAdmin = user?.role === "admin";
@@ -56,7 +65,10 @@ export default function App() {
   const loadServices = async () => {
     const res = await fetch("/api/services");
     if (res.ok) setServices(await res.json());
-    else show("Không tải được dịch vụ từ 2 nguồn");
+    else {
+      const err = await res.json().catch(() => ({}));
+      show(err.message || "Không tải được dịch vụ");
+    }
   };
 
   const loadUsers = async () => {
@@ -70,12 +82,8 @@ export default function App() {
     const res = await fetch("/api/admin/services", { headers });
     if (res.ok) {
       const data = await res.json();
-      setAdminServices(Array.isArray(data) ? data : (data.sources || []));
-      setProviderErrors(data.errors || []);
+      setAdminServices(data.sources || []);
       setProviderCounts(data.counts || {});
-      if (data.errors && data.errors.length > 0) {
-        show("Có nguồn API lỗi, xem thông báo trong Quản lý dịch vụ");
-      }
     } else {
       const err = await res.json().catch(() => ({}));
       show(err.message || "Không tải được dịch vụ admin");
@@ -140,10 +148,16 @@ export default function App() {
 
   const rentNumber = async (service: Service) => {
     if (!user) return;
-    if (!confirm(`Thuê ${service.name} giá ${service.price.toLocaleString("vi-VN")}đ? Hệ thống sẽ tự chọn nguồn ngon hơn.`)) return;
+    const carrierText = selectedCarrier || "Tất cả nhà mạng";
+    if (!confirm(`Thuê ${service.name} giá ${service.price.toLocaleString("vi-VN")}đ?\nNhà mạng: ${carrierText}`)) return;
+
     setBusy(true);
     try {
-      const res = await fetch("/api/orders", { method: "POST", headers, body: JSON.stringify({ userId: user.id, appId: service.id }) });
+      const res = await fetch("/api/orders", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ userId: user.id, appId: service.sourceKey || service.id, carrier: selectedCarrier })
+      });
       const data = await res.json();
       if (!res.ok) return show(data.message || "Không lấy được số");
       setUser(data.user);
@@ -339,7 +353,7 @@ export default function App() {
             <div className="flex items-center justify-between mb-4"><h2 className="text-2xl font-black">📱 Số đang chờ OTP</h2><button onClick={loadOrders} className="bg-white/20 rounded-xl px-4 py-2 font-bold">Tải lại</button></div>
             <div className="space-y-3">{waitingOrders.map(o => (
               <div key={o.id} className="bg-white/15 rounded-2xl p-4 flex flex-col md:flex-row md:justify-between md:items-center gap-4">
-                <div><div className="text-3xl font-black tracking-wide">{o.number}</div><div className="text-sm opacity-90 mt-1">Dịch vụ: {o.appName} | Nguồn: {o.provider || "auto"} | Giá: {o.price.toLocaleString("vi-VN")}đ</div>{o.sms && <div className="mt-2 text-sm">SMS: {o.sms}</div>}</div>
+                <div><div className="text-3xl font-black tracking-wide">{o.number}</div><div className="text-sm opacity-90 mt-1">Dịch vụ: {o.appName} | Nhà mạng: {o.carrier || "Tất cả"} | Giá: {o.price.toLocaleString("vi-VN")}đ</div>{o.sms && <div className="mt-2 text-sm">SMS: {o.sms}</div>}</div>
                 <div className="flex gap-2"><button onClick={() => checkCode(o)} className="bg-white text-indigo-700 rounded-xl px-4 py-2 font-black">Check OTP</button><button onClick={() => cancelOrder(o)} className="bg-rose-600 text-white rounded-xl px-4 py-2 font-black">Hủy</button></div>
               </div>
             ))}</div>
@@ -351,12 +365,17 @@ export default function App() {
 
         {tab === "services" && <section>
           <div className="flex justify-between items-center mb-5"><h1 className="text-3xl font-black">Dịch vụ OTP</h1><button onClick={loadServices} className="bg-slate-900 text-white rounded-2xl px-5 py-3 font-bold">Tải lại</button></div>
-          <input className="w-full rounded-2xl border px-5 py-4 mb-5" placeholder="Tìm dịch vụ..." value={search} onChange={e => setSearch(e.target.value)} />
+          <div className="grid md:grid-cols-2 gap-4 mb-5">
+            <input className="w-full rounded-2xl border px-5 py-4" placeholder="Tìm dịch vụ..." value={search} onChange={e => setSearch(e.target.value)} />
+            <select className="w-full rounded-2xl border px-5 py-4 bg-white" value={selectedCarrier} onChange={e => setSelectedCarrier(e.target.value)}>
+              {carriers.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+            </select>
+          </div>
+          {services.length === 0 && <div className="bg-amber-50 border border-amber-200 rounded-3xl p-6 font-bold">Hiện chưa có dịch vụ nào được mở. Admin vào Quản lý dịch vụ để bấm Bỏ ẩn dịch vụ muốn bán.</div>}
           <div className="grid md:grid-cols-3 gap-5">
-            {filteredServices.map(s => <div key={s.id} className="bg-white rounded-3xl p-6 shadow">
+            {filteredServices.map(s => <div key={s.sourceKey || s.id} className="bg-white rounded-3xl p-6 shadow">
               <h3 className="text-xl font-black">{s.name}</h3>
-              <p className="text-slate-500 text-sm mt-1">ID: {s.id}</p>
-              {s.sources && <p className="text-xs text-emerald-600 font-bold mt-1">Nguồn tốt nhất: {s.bestProvider} | Có {s.sources.length} nguồn</p>}
+              <p className="text-slate-500 text-sm mt-1">Nguồn: chaycodeso3 | ID: {s.providerId}</p>
               {s.note && <p className="text-sm mt-3 bg-slate-100 rounded-xl p-3">{s.note}</p>}
               <p className="text-2xl font-black text-indigo-600 mt-4">{s.price.toLocaleString("vi-VN")}đ</p>
               <button onClick={() => rentNumber(s)} className="mt-5 w-full bg-indigo-600 text-white rounded-2xl py-3 font-black">Thuê số</button>
@@ -366,7 +385,7 @@ export default function App() {
 
         {tab === "orders" && <Panel title="Lịch sử thuê">
           <div className="space-y-3">{orders.map(o => <div key={o.id} className="border rounded-2xl p-4 flex justify-between items-center">
-            <div><b>{o.appName}</b> - {o.number}<p className="text-sm text-slate-500">Nguồn: {o.provider || "auto"} | Trạng thái: {o.status} | Giá: {o.price.toLocaleString("vi-VN")}đ</p>{o.code && <p className="text-green-600 font-black">Code: {o.code}</p>}{o.sms && <p className="text-sm">{o.sms}</p>}</div>
+            <div><b>{o.appName}</b> - {o.number}<p className="text-sm text-slate-500">Nhà mạng: {o.carrier || "Tất cả"} | Trạng thái: {o.status} | Giá: {o.price.toLocaleString("vi-VN")}đ</p>{o.code && <p className="text-green-600 font-black">Code: {o.code}</p>}{o.sms && <p className="text-sm">{o.sms}</p>}</div>
             <div className="flex gap-2"><button onClick={() => checkCode(o)} className="bg-indigo-600 text-white rounded-xl px-4 py-2 font-bold">Check code</button>{o.status === "waiting" && <button onClick={() => cancelOrder(o)} className="bg-rose-600 text-white rounded-xl px-4 py-2 font-bold">Hủy</button>}</div>
           </div>)}</div>
         </Panel>}
@@ -389,31 +408,12 @@ export default function App() {
           </tbody></table>
         </Panel>}
 
-        {tab === "adminServices" && isAdmin && <Panel title="Quản lý dịch vụ theo từng nguồn">
+        {tab === "adminServices" && isAdmin && <Panel title="Quản lý dịch vụ">
           <div className="flex flex-col md:flex-row gap-3 mb-4"><button onClick={loadAdminServices} className="bg-slate-900 text-white rounded-2xl px-5 py-3 font-bold">Tải dịch vụ API</button><button onClick={() => bulkSetHidden(true, false)} disabled={busy} className="bg-rose-600 text-white rounded-2xl px-5 py-3 font-bold">Ẩn tất cả</button><button onClick={() => bulkSetHidden(false, true)} disabled={busy} className="bg-emerald-600 text-white rounded-2xl px-5 py-3 font-bold">Hiện dịch vụ đang tìm</button><button onClick={() => bulkSetHidden(true, true)} disabled={busy} className="bg-amber-500 text-white rounded-2xl px-5 py-3 font-bold">Ẩn dịch vụ đang tìm</button></div>
-          <input value={adminServiceSearch} onChange={e => setAdminServiceSearch(e.target.value)} className="w-full border rounded-2xl px-5 py-4 mb-4" placeholder="Tìm dịch vụ, nguồn hoặc ID..." />
-
-          <div className="grid md:grid-cols-3 gap-3 mb-4">
-            <div className="bg-slate-100 rounded-2xl p-4"><b>Tổng nguồn</b><p className="text-2xl font-black">{providerCounts.total || adminServices.length}</p></div>
-            <div className="bg-blue-50 rounded-2xl p-4"><b>Chaycodeso3</b><p className="text-2xl font-black">{providerCounts.chaycodeso3 || 0}</p></div>
-            <div className="bg-emerald-50 rounded-2xl p-4"><b>Codesim</b><p className="text-2xl font-black">{providerCounts.codesim || 0}</p></div>
-          </div>
-
-          {providerErrors.length > 0 && (
-            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 mb-4">
-              <b className="text-rose-700">Có nguồn API đang lỗi:</b>
-              <div className="mt-2 space-y-2 text-sm">
-                {providerErrors.map((e, i) => (
-                  <div key={i}>
-                    <b>{e.provider}</b>: {e.error?.message || e.error?.Msg || JSON.stringify(e.error).slice(0, 250)}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="mb-4 text-sm text-slate-500">Đang hiển thị <b>{filteredAdminServices.length}</b>/<b>{adminServices.length}</b> nguồn dịch vụ. Một dịch vụ có thể có 2 nguồn: chaycodeso3 và codesim.</div>
-          <div className="space-y-3">{filteredAdminServices.map(s => <div key={s.id} className={`border rounded-2xl p-4 grid md:grid-cols-6 gap-3 items-center ${s.hidden ? "bg-rose-50 border-rose-200" : "bg-white"}`}><div><b>{s.originalName}</b><p className="text-xs text-slate-500">Nguồn {s.provider} | ID {s.providerId || s.id} | API {s.providerCost}đ</p><p className={`text-xs font-bold mt-1 ${s.hidden ? "text-rose-600" : "text-emerald-600"}`}>{s.hidden ? "Đang ẩn" : "Đang hiện"}</p></div><input defaultValue={s.name} onBlur={e => saveService(s, { name: e.target.value })} className="border rounded-xl px-3 py-2" placeholder="Tên hiển thị" /><input defaultValue={s.price} onBlur={e => saveService(s, { price: Number(e.target.value) })} className="border rounded-xl px-3 py-2" placeholder="Giá bán" /><input defaultValue={s.note || ""} onBlur={e => saveService(s, { note: e.target.value })} className="border rounded-xl px-3 py-2" placeholder="Chú thích" /><label className="flex gap-2 items-center font-bold"><input type="checkbox" checked={s.hidden} onChange={e => saveService(s, { hidden: e.target.checked })} />Ẩn</label><button onClick={() => saveService(s, { hidden: !s.hidden })} className={`${s.hidden ? "bg-emerald-600" : "bg-rose-600"} text-white rounded-xl px-3 py-2 font-bold`}>{s.hidden ? "Bỏ ẩn" : "Ẩn"}</button></div>)}</div>
+          <input value={adminServiceSearch} onChange={e => setAdminServiceSearch(e.target.value)} className="w-full border rounded-2xl px-5 py-4 mb-4" placeholder="Tìm dịch vụ hoặc ID..." />
+          <div className="grid md:grid-cols-3 gap-3 mb-4"><div className="bg-slate-100 rounded-2xl p-4"><b>Tổng</b><p className="text-2xl font-black">{providerCounts.total || adminServices.length}</p></div><div className="bg-emerald-50 rounded-2xl p-4"><b>Đang hiện</b><p className="text-2xl font-black">{providerCounts.visible || 0}</p></div><div className="bg-rose-50 rounded-2xl p-4"><b>Đang ẩn</b><p className="text-2xl font-black">{providerCounts.hidden || 0}</p></div></div>
+          <div className="mb-4 bg-amber-50 border border-amber-200 rounded-2xl p-4 font-semibold">Mặc định dịch vụ mới từ API sẽ bị ẩn. Bạn muốn bán dịch vụ nào thì tìm rồi bấm “Bỏ ẩn”.</div>
+          <div className="space-y-3">{filteredAdminServices.map(s => <div key={s.sourceKey || s.id} className={`border rounded-2xl p-4 grid md:grid-cols-6 gap-3 items-center ${s.hidden ? "bg-rose-50 border-rose-200" : "bg-white"}`}><div><b>{s.originalName}</b><p className="text-xs text-slate-500">Nguồn chaycodeso3 | ID {s.providerId} | API {s.providerCost}đ</p><p className={`text-xs font-bold mt-1 ${s.hidden ? "text-rose-600" : "text-emerald-600"}`}>{s.hidden ? "Đang ẩn" : "Đang hiện"}</p></div><input defaultValue={s.name} onBlur={e => saveService(s, { name: e.target.value })} className="border rounded-xl px-3 py-2" placeholder="Tên hiển thị" /><input defaultValue={s.price} onBlur={e => saveService(s, { price: Number(e.target.value) })} className="border rounded-xl px-3 py-2" placeholder="Giá bán" /><input defaultValue={s.note || ""} onBlur={e => saveService(s, { note: e.target.value })} className="border rounded-xl px-3 py-2" placeholder="Chú thích" /><label className="flex gap-2 items-center font-bold"><input type="checkbox" checked={s.hidden} onChange={e => saveService(s, { hidden: e.target.checked })} />Ẩn</label><button onClick={() => saveService(s, { hidden: !s.hidden })} className={`${s.hidden ? "bg-emerald-600" : "bg-rose-600"} text-white rounded-xl px-3 py-2 font-bold`}>{s.hidden ? "Bỏ ẩn" : "Ẩn"}</button></div>)}</div>
         </Panel>}
 
         {tab === "settings" && isAdmin && <Panel title="Cài đặt giao diện">
