@@ -463,6 +463,48 @@ app.get("/api/provider/account", requireAdmin, async (req, res) => {
   });
 });
 
+
+app.get("/api/source-status", async (req, res) => {
+  const [chayApps, codesimApps, chayAccount, codesimAccount] = await Promise.allSettled([
+    callChay({ act: "app" }),
+    callCodesim("/service/get_service_by_api_key"),
+    callChay({ act: "account" }),
+    callCodesim("/yourself/information-by-api-key")
+  ]);
+
+  const chayAppValue = chayApps.status === "fulfilled" ? chayApps.value : null;
+  const codesimAppValue = codesimApps.status === "fulfilled" ? codesimApps.value : null;
+  const chayAccountValue = chayAccount.status === "fulfilled" ? chayAccount.value : null;
+  const codesimAccountValue = codesimAccount.status === "fulfilled" ? codesimAccount.value : null;
+
+  const codesimList =
+    Array.isArray(codesimAppValue?.data) ? codesimAppValue.data :
+    Array.isArray(codesimAppValue?.Result) ? codesimAppValue.Result :
+    Array.isArray(codesimAppValue?.result) ? codesimAppValue.result :
+    Array.isArray(codesimAppValue?.data?.data) ? codesimAppValue.data.data :
+    [];
+
+  res.json({
+    chaycodeso3: {
+      ok: Boolean(chayAppValue && chayAppValue.ResponseCode === 0),
+      serviceCount: Array.isArray(chayAppValue?.Result) ? chayAppValue.Result.length : 0,
+      accountMessage: chayAccountValue?.Msg || chayAccountValue?.message || "",
+      appMessage: chayAppValue?.Msg || chayAppValue?.message || "",
+      appStatus: chayAppValue?.ResponseCode ?? chayAppValue?.status ?? null
+    },
+    codesim: {
+      ok: Boolean(codesimAppValue && Number(codesimAppValue.status) === 200),
+      serviceCount: codesimList.length,
+      accountOk: Boolean(codesimAccountValue && Number(codesimAccountValue.status) === 200),
+      accountMessage: codesimAccountValue?.message || codesimAccountValue?.Msg || "",
+      appMessage: codesimAppValue?.message || codesimAppValue?.Msg || "",
+      appStatus: codesimAppValue?.status ?? codesimAppValue?.ResponseCode ?? null,
+      rawShape: codesimAppValue ? Object.keys(codesimAppValue) : []
+    }
+  });
+});
+
+
 app.get("/api/services", async (req, res) => {
   const data = await readData();
   const { sources, errors } = await getAllSources();
