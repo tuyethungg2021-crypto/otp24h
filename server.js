@@ -19,10 +19,16 @@ const defaultData = {
     logoText: "OTP",
     background: "bg-slate-950",
     announcement: "Chào mừng bạn đến với OTP 24H. Hệ thống thuê sim nhận mã tự động.",
-    bannerImage: ""
+    bannerImage: "",
+    bankName: "TECHCOMBANK",
+    bankAccountNumber: "MS00T07014613285196",
+    bankBeneficiary: "NGUYEN VAN HUNG",
+    bankQrUrl: "",
+    topupNote: "Nội dung chuyển khoản: username của bạn. Sau khi chuyển khoản hãy tạo yêu cầu nạp tiền để admin duyệt."
   },
   serviceOverrides: {},
-  orders: []
+  orders: [],
+  topups: []
 };
 
 function readData() {
@@ -35,7 +41,8 @@ function readData() {
       settings: { ...defaultData.settings, ...(data.settings || {}) },
       users: data.users || defaultData.users,
       serviceOverrides: data.serviceOverrides || {},
-      orders: data.orders || []
+      orders: data.orders || [],
+      topups: data.topups || []
     };
   } catch {
     fs.writeFileSync(DATA_FILE, JSON.stringify(defaultData, null, 2));
@@ -247,6 +254,82 @@ app.post("/api/orders/:id/cancel", async (req, res) => {
   writeData(data);
   res.json({ order, api });
 });
+
+
+app.post("/api/topups", (req, res) => {
+  const { userId, amount, note } = req.body;
+  const data = readData();
+  const user = data.users.find(u => u.id === userId);
+
+  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+
+  const money = Number(amount || 0);
+  if (!money || Number.isNaN(money) || money <= 0) {
+    return res.status(400).json({ message: "Số tiền nạp không hợp lệ" });
+  }
+
+  const topup = {
+    id: "t-" + Date.now(),
+    userId,
+    username: user.username,
+    amount: money,
+    note: note || "",
+    status: "pending",
+    createdAt: new Date().toISOString()
+  };
+
+  data.topups.unshift(topup);
+  writeData(data);
+
+  res.json(topup);
+});
+
+app.get("/api/topups", (req, res) => {
+  const data = readData();
+  const userId = req.query.userId;
+  const user = data.users.find(u => u.id === userId);
+
+  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+
+  const topups = user.role === "admin" ? data.topups : data.topups.filter(t => t.userId === userId);
+  res.json(topups);
+});
+
+app.post("/api/topups/:id/approve", requireAdmin, (req, res) => {
+  const data = req.data;
+  const topup = data.topups.find(t => t.id === req.params.id);
+
+  if (!topup) return res.status(404).json({ message: "Không tìm thấy yêu cầu nạp" });
+  if (topup.status !== "pending") return res.status(400).json({ message: "Yêu cầu này đã xử lý rồi" });
+
+  const user = data.users.find(u => u.id === topup.userId);
+  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+
+  user.balance = Number(user.balance || 0) + Number(topup.amount || 0);
+  topup.status = "approved";
+  topup.approvedAt = new Date().toISOString();
+  topup.approvedBy = req.admin.username;
+
+  writeData(data);
+  res.json({ topup, user: publicUser(user) });
+});
+
+app.post("/api/topups/:id/reject", requireAdmin, (req, res) => {
+  const data = req.data;
+  const topup = data.topups.find(t => t.id === req.params.id);
+
+  if (!topup) return res.status(404).json({ message: "Không tìm thấy yêu cầu nạp" });
+  if (topup.status !== "pending") return res.status(400).json({ message: "Yêu cầu này đã xử lý rồi" });
+
+  topup.status = "rejected";
+  topup.rejectedAt = new Date().toISOString();
+  topup.rejectedBy = req.admin.username;
+  topup.rejectReason = req.body.reason || "";
+
+  writeData(data);
+  res.json(topup);
+});
+
 
 const distPath = path.resolve("dist");
 app.use(express.static(distPath));

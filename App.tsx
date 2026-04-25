@@ -3,14 +3,31 @@ import React, { useEffect, useMemo, useState } from "react";
 type User = { id: string; username: string; role: "admin" | "user"; balance: number };
 type Service = { id: string; originalName: string; name: string; providerCost: number; price: number; hidden: boolean; note?: string };
 type Order = { id: string; appName: string; number: string; price: number; status: string; code?: string; sms?: string; createdAt: string };
-type Settings = { siteName: string; logoText: string; background: string; announcement: string; bannerImage: string };
+type Settings = {
+  siteName: string;
+  logoText: string;
+  background: string;
+  announcement: string;
+  bannerImage: string;
+  bankName: string;
+  bankAccountNumber: string;
+  bankBeneficiary: string;
+  bankQrUrl: string;
+  topupNote: string;
+};
+type Topup = { id: string; userId: string; username: string; amount: number; note?: string; status: string; createdAt: string };
 
 const defaultSettings: Settings = {
   siteName: "OTP 24H",
   logoText: "OTP",
   background: "bg-slate-950",
   announcement: "",
-  bannerImage: ""
+  bannerImage: "",
+  bankName: "TECHCOMBANK",
+  bankAccountNumber: "MS00T07014613285196",
+  bankBeneficiary: "NGUYEN VAN HUNG",
+  bankQrUrl: "",
+  topupNote: "Nội dung chuyển khoản: username của bạn. Sau khi chuyển khoản hãy tạo yêu cầu nạp tiền để admin duyệt."
 };
 
 export default function App() {
@@ -19,6 +36,7 @@ export default function App() {
   const [services, setServices] = useState<Service[]>([]);
   const [adminServices, setAdminServices] = useState<Service[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [topups, setTopups] = useState<Topup[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [tab, setTab] = useState("services");
   const [isLogin, setIsLogin] = useState(true);
@@ -27,6 +45,9 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [search, setSearch] = useState("");
   const [busy, setBusy] = useState(false);
+  const [topupAmount, setTopupAmount] = useState("");
+  const [topupNote, setTopupNote] = useState("");
+  const [adminServiceSearch, setAdminServiceSearch] = useState("");
 
   const headers = user ? { "Content-Type": "application/json", "x-user-id": user.id } : { "Content-Type": "application/json" };
   const isAdmin = user?.role === "admin";
@@ -66,6 +87,13 @@ export default function App() {
     if (res.ok) setOrders(await res.json());
   };
 
+  const loadTopups = async () => {
+    if (!user) return;
+    const res = await fetch(`/api/topups?userId=${user.id}`);
+    if (res.ok) setTopups(await res.json());
+  };
+
+
   useEffect(() => {
     loadSettings();
     loadServices();
@@ -74,6 +102,7 @@ export default function App() {
   useEffect(() => {
     if (user) {
       loadOrders();
+      loadTopups();
       loadUsers();
       loadAdminServices();
     }
@@ -178,11 +207,81 @@ export default function App() {
     show("Đã lưu dịch vụ");
   };
 
+  const bulkSetHidden = async (hidden: boolean, onlyFiltered = false) => {
+    const list = onlyFiltered ? filteredAdminServices : adminServices;
+    if (list.length === 0) return show("Không có dịch vụ nào để cập nhật");
+
+    const action = hidden ? "ẩn" : "hiện";
+    if (!confirm(`${action.toUpperCase()} ${list.length} dịch vụ ${onlyFiltered ? "đang lọc" : "tất cả"}?`)) return;
+
+    setBusy(true);
+    try {
+      await Promise.all(
+        list.map(s =>
+          fetch(`/api/admin/services/${s.id}`, {
+            method: "PUT",
+            headers,
+            body: JSON.stringify({ hidden })
+          })
+        )
+      );
+      await loadAdminServices();
+      await loadServices();
+      show(`Đã ${action} ${list.length} dịch vụ`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+
   const saveSettings = async () => {
     const res = await fetch("/api/settings", { method: "PUT", headers, body: JSON.stringify(settings) });
     const data = await res.json();
     if (!res.ok) return show(data.message || "Lỗi lưu cài đặt");
     show("Đã lưu cài đặt");
+  };
+
+  const createTopup = async () => {
+    if (!user) return;
+    const amount = Number(topupAmount || 0);
+    if (!amount || Number.isNaN(amount) || amount <= 0) return show("Nhập số tiền nạp hợp lệ");
+
+    const res = await fetch("/api/topups", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ userId: user.id, amount, note: topupNote })
+    });
+    const data = await res.json();
+    if (!res.ok) return show(data.message || "Lỗi tạo yêu cầu nạp");
+
+    setTopupAmount("");
+    setTopupNote("");
+    await loadTopups();
+    show("Đã gửi yêu cầu nạp tiền, chờ admin duyệt");
+  };
+
+  const approveTopup = async (topup: Topup) => {
+    const res = await fetch(`/api/topups/${topup.id}/approve`, { method: "POST", headers });
+    const data = await res.json();
+    if (!res.ok) return show(data.message || "Lỗi duyệt nạp tiền");
+
+    await loadTopups();
+    await loadUsers();
+    show("Đã duyệt và cộng tiền cho user");
+  };
+
+  const rejectTopup = async (topup: Topup) => {
+    const reason = prompt("Lý do từ chối", "");
+    const res = await fetch(`/api/topups/${topup.id}/reject`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ reason })
+    });
+    const data = await res.json();
+    if (!res.ok) return show(data.message || "Lỗi từ chối nạp tiền");
+
+    await loadTopups();
+    show("Đã từ chối yêu cầu nạp");
   };
 
   const changeOwnPassword = async () => {
@@ -198,6 +297,7 @@ export default function App() {
 
   const filteredServices = useMemo(() => services.filter(s => s.name.toLowerCase().includes(search.toLowerCase())), [services, search]);
   const waitingOrders = orders.filter(o => o.status === "waiting");
+  const filteredAdminServices = useMemo(() => adminServices.filter(s => `${s.originalName} ${s.name} ${s.id}`.toLowerCase().includes(adminServiceSearch.toLowerCase())), [adminServices, adminServiceSearch]);
 
   if (!user) {
     return (
@@ -232,9 +332,11 @@ export default function App() {
         <div className="space-y-2">
           <Nav label="Dịch vụ" id="services" tab={tab} setTab={setTab} />
           <Nav label="Lịch sử thuê" id="orders" tab={tab} setTab={setTab} />
+          <Nav label="Nạp tiền" id="topup" tab={tab} setTab={setTab} />
           <button onClick={changeOwnPassword} className="w-full rounded-2xl px-4 py-3 text-left font-bold bg-slate-800">Đổi mật khẩu</button>
           {isAdmin && <>
             <Nav label="Quản lý user" id="users" tab={tab} setTab={setTab} />
+            <Nav label="Duyệt nạp tiền" id="adminTopups" tab={tab} setTab={setTab} />
             <Nav label="Quản lý dịch vụ" id="adminServices" tab={tab} setTab={setTab} />
             <Nav label="Giao diện" id="settings" tab={tab} setTab={setTab} />
           </>}
@@ -305,6 +407,62 @@ export default function App() {
           </div>)}</div>
         </Panel>}
 
+        {tab === "topup" && <Panel title="Nạp tiền">
+          <div className="grid md:grid-cols-2 gap-6">
+            <div className="border rounded-3xl p-6">
+              <h2 className="text-2xl font-black mb-4">Thông tin chuyển khoản</h2>
+              <div className="space-y-3 text-lg">
+                <p><b>Ngân hàng:</b> {settings.bankName}</p>
+                <p><b>Số tài khoản:</b> <span className="text-indigo-600 font-black">{settings.bankAccountNumber}</span></p>
+                <p><b>Chủ tài khoản:</b> {settings.bankBeneficiary}</p>
+                <p><b>Nội dung:</b> <span className="text-rose-600 font-black">{user.username}</span></p>
+              </div>
+              {settings.bankQrUrl && <img src={settings.bankQrUrl} className="mt-5 max-w-xs rounded-2xl border" />}
+              {settings.topupNote && <div className="mt-5 bg-amber-50 border border-amber-200 rounded-2xl p-4 font-semibold">{settings.topupNote}</div>}
+            </div>
+
+            <div className="border rounded-3xl p-6">
+              <h2 className="text-2xl font-black mb-4">Tạo yêu cầu nạp</h2>
+              <input value={topupAmount} onChange={e => setTopupAmount(e.target.value)} className="w-full border rounded-2xl px-5 py-4 mb-4" placeholder="Số tiền đã chuyển, ví dụ 100000" />
+              <textarea value={topupNote} onChange={e => setTopupNote(e.target.value)} className="w-full border rounded-2xl px-5 py-4 mb-4" placeholder="Ghi chú / mã giao dịch nếu có" />
+              <button onClick={createTopup} className="w-full bg-indigo-600 text-white rounded-2xl px-6 py-4 font-black">Gửi yêu cầu nạp tiền</button>
+            </div>
+          </div>
+
+          <h2 className="text-2xl font-black mt-8 mb-4">Lịch sử nạp tiền</h2>
+          <div className="space-y-3">
+            {topups.map(t => (
+              <div key={t.id} className="border rounded-2xl p-4 flex justify-between">
+                <div>
+                  <b>{t.amount.toLocaleString("vi-VN")}đ</b>
+                  <p className="text-sm text-slate-500">Trạng thái: {t.status} | {new Date(t.createdAt).toLocaleString("vi-VN")}</p>
+                  {t.note && <p className="text-sm">{t.note}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>}
+
+        {tab === "adminTopups" && isAdmin && <Panel title="Duyệt nạp tiền">
+          <div className="space-y-3">
+            {topups.map(t => (
+              <div key={t.id} className={`border rounded-2xl p-4 flex flex-col md:flex-row md:justify-between md:items-center gap-4 ${t.status === "pending" ? "bg-amber-50 border-amber-200" : "bg-white"}`}>
+                <div>
+                  <b>{t.username}</b> muốn nạp <b className="text-indigo-600">{t.amount.toLocaleString("vi-VN")}đ</b>
+                  <p className="text-sm text-slate-500">Trạng thái: {t.status} | {new Date(t.createdAt).toLocaleString("vi-VN")}</p>
+                  {t.note && <p className="text-sm">Ghi chú: {t.note}</p>}
+                </div>
+                {t.status === "pending" && (
+                  <div className="flex gap-2">
+                    <button onClick={() => approveTopup(t)} className="bg-emerald-600 text-white rounded-xl px-4 py-2 font-bold">Duyệt cộng tiền</button>
+                    <button onClick={() => rejectTopup(t)} className="bg-rose-600 text-white rounded-xl px-4 py-2 font-bold">Từ chối</button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </Panel>}
+
         {tab === "users" && isAdmin && <Panel title="Quản lý user">
           <table className="w-full text-left"><thead><tr className="border-b"><th className="py-3">User</th><th>Role</th><th>Số dư</th><th>Hành động</th></tr></thead><tbody>
             {users.map(u => <tr key={u.id} className="border-b"><td className="py-4 font-bold">{u.username}</td><td>{u.role}</td><td>{u.balance.toLocaleString("vi-VN")}đ</td><td className="flex gap-2 py-3"><button onClick={() => adjustBalance(u)} className="bg-indigo-600 text-white rounded-xl px-3 py-2 text-sm font-bold">Cộng/trừ</button><button onClick={() => changeUserPass(u)} className="bg-amber-500 text-white rounded-xl px-3 py-2 text-sm font-bold">Đổi pass</button><button onClick={() => deleteUser(u)} className="bg-rose-600 text-white rounded-xl px-3 py-2 text-sm font-bold">Xóa</button></td></tr>)}
@@ -312,14 +470,31 @@ export default function App() {
         </Panel>}
 
         {tab === "adminServices" && isAdmin && <Panel title="Quản lý dịch vụ">
-          <button onClick={loadAdminServices} className="mb-4 bg-slate-900 text-white rounded-2xl px-5 py-3 font-bold">Tải dịch vụ API</button>
-          <div className="space-y-3">{adminServices.map(s => <div key={s.id} className="border rounded-2xl p-4 grid md:grid-cols-6 gap-3 items-center">
-            <div><b>{s.originalName}</b><p className="text-xs text-slate-500">ID {s.id} | API {s.providerCost}đ</p></div>
+          <div className="flex flex-col md:flex-row gap-3 mb-4">
+            <button onClick={loadAdminServices} className="bg-slate-900 text-white rounded-2xl px-5 py-3 font-bold">Tải dịch vụ API</button>
+            <button onClick={() => bulkSetHidden(true, false)} disabled={busy} className="bg-rose-600 text-white rounded-2xl px-5 py-3 font-bold disabled:opacity-60">Ẩn tất cả</button>
+            <button onClick={() => bulkSetHidden(false, true)} disabled={busy} className="bg-emerald-600 text-white rounded-2xl px-5 py-3 font-bold disabled:opacity-60">Hiện các dịch vụ đang tìm</button>
+            <button onClick={() => bulkSetHidden(true, true)} disabled={busy} className="bg-amber-500 text-white rounded-2xl px-5 py-3 font-bold disabled:opacity-60">Ẩn các dịch vụ đang tìm</button>
+          </div>
+
+          <input
+            value={adminServiceSearch}
+            onChange={e => setAdminServiceSearch(e.target.value)}
+            className="w-full border rounded-2xl px-5 py-4 mb-4"
+            placeholder="Tìm dịch vụ để bỏ ẩn nhanh... ví dụ Facebook, Zalo, Shopee hoặc ID"
+          />
+
+          <div className="mb-4 text-sm text-slate-500">
+            Đang hiển thị <b>{filteredAdminServices.length}</b>/<b>{adminServices.length}</b> dịch vụ. Tick bỏ ẩn hoặc bấm “Hiện các dịch vụ đang tìm”.
+          </div>
+
+          <div className="space-y-3">{filteredAdminServices.map(s => <div key={s.id} className={`border rounded-2xl p-4 grid md:grid-cols-6 gap-3 items-center ${s.hidden ? "bg-rose-50 border-rose-200" : "bg-white"}`}>
+            <div><b>{s.originalName}</b><p className="text-xs text-slate-500">ID {s.id} | API {s.providerCost}đ</p><p className={`text-xs font-bold mt-1 ${s.hidden ? "text-rose-600" : "text-emerald-600"}`}>{s.hidden ? "Đang ẩn" : "Đang hiện"}</p></div>
             <input defaultValue={s.name} onBlur={e => saveService(s, { name: e.target.value })} className="border rounded-xl px-3 py-2" placeholder="Tên hiển thị" />
             <input defaultValue={s.price} onBlur={e => saveService(s, { price: Number(e.target.value) })} className="border rounded-xl px-3 py-2" placeholder="Giá bán" />
             <input defaultValue={s.note || ""} onBlur={e => saveService(s, { note: e.target.value })} className="border rounded-xl px-3 py-2" placeholder="Chú thích" />
-            <label className="flex gap-2 items-center"><input type="checkbox" defaultChecked={s.hidden} onChange={e => saveService(s, { hidden: e.target.checked })} />Ẩn</label>
-            <button onClick={() => saveService(s, { hidden: !s.hidden })} className="bg-indigo-600 text-white rounded-xl px-3 py-2 font-bold">Lưu</button>
+            <label className="flex gap-2 items-center font-bold"><input type="checkbox" defaultChecked={s.hidden} onChange={e => saveService(s, { hidden: e.target.checked })} />Ẩn</label>
+            <button onClick={() => saveService(s, { hidden: !s.hidden })} className={`${s.hidden ? "bg-emerald-600" : "bg-rose-600"} text-white rounded-xl px-3 py-2 font-bold`}>{s.hidden ? "Bỏ ẩn" : "Ẩn"}</button>
           </div>)}</div>
         </Panel>}
 
@@ -330,7 +505,17 @@ export default function App() {
             <select value={settings.background} onChange={e => setSettings({ ...settings, background: e.target.value })} className="w-full border rounded-2xl px-5 py-4"><option value="bg-slate-950">Nền đen</option><option value="bg-indigo-950">Nền tím</option><option value="bg-blue-950">Nền xanh</option><option value="bg-emerald-950">Nền xanh lá</option></select>
             <textarea value={settings.announcement} onChange={e => setSettings({ ...settings, announcement: e.target.value })} className="w-full border rounded-2xl px-5 py-4" placeholder="Thông báo admin" />
             <input value={settings.bannerImage} onChange={e => setSettings({ ...settings, bannerImage: e.target.value })} className="w-full border rounded-2xl px-5 py-4" placeholder="Link ảnh thông báo/banner" />
-            <button onClick={saveSettings} className="bg-indigo-600 text-white rounded-2xl px-6 py-4 font-black">Lưu giao diện</button>
+
+            <div className="pt-4 border-t">
+              <h2 className="text-2xl font-black mb-4">Thông tin nạp tiền</h2>
+              <input value={settings.bankName || ""} onChange={e => setSettings({ ...settings, bankName: e.target.value })} className="w-full border rounded-2xl px-5 py-4 mb-3" placeholder="Tên ngân hàng" />
+              <input value={settings.bankAccountNumber || ""} onChange={e => setSettings({ ...settings, bankAccountNumber: e.target.value })} className="w-full border rounded-2xl px-5 py-4 mb-3" placeholder="Số tài khoản" />
+              <input value={settings.bankBeneficiary || ""} onChange={e => setSettings({ ...settings, bankBeneficiary: e.target.value })} className="w-full border rounded-2xl px-5 py-4 mb-3" placeholder="Chủ tài khoản" />
+              <input value={settings.bankQrUrl || ""} onChange={e => setSettings({ ...settings, bankQrUrl: e.target.value })} className="w-full border rounded-2xl px-5 py-4 mb-3" placeholder="Link ảnh QR ngân hàng" />
+              <textarea value={settings.topupNote || ""} onChange={e => setSettings({ ...settings, topupNote: e.target.value })} className="w-full border rounded-2xl px-5 py-4" placeholder="Ghi chú nạp tiền cho user" />
+            </div>
+
+            <button onClick={saveSettings} className="bg-indigo-600 text-white rounded-2xl px-6 py-4 font-black">Lưu giao diện & nạp tiền</button>
           </div>
         </Panel>}
       </main>
