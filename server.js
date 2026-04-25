@@ -271,6 +271,15 @@ app.post("/api/change-password", async (req, res) => {
   res.json({ message: "Đổi mật khẩu thành công" });
 });
 
+app.get("/api/me", async (req, res) => {
+  const data = await readData();
+  const user = data.users.find(u => u.id === req.query.userId);
+
+  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+
+  res.json(publicUser(user));
+});
+
 app.get("/api/users", requireAdmin, async (req, res) => res.json(req.data.users.map(publicUser)));
 
 app.post("/api/users/:id/adjust-balance", requireAdmin, async (req, res) => {
@@ -468,6 +477,8 @@ app.post("/api/orders/:id/check-code", async (req, res) => {
 
   const api = await callChay({ act: "code", id: order.providerQueueId });
 
+  let updatedUser = null;
+
   if (api.ResponseCode === 0) {
     order.status = "done";
     order.code = api.Result?.Code || "";
@@ -478,7 +489,10 @@ app.post("/api/orders/:id/check-code", async (req, res) => {
 
     if (!order.refunded) {
       const user = data.users.find(u => u.id === order.userId);
-      if (user) user.balance = Number(user.balance || 0) + Number(order.price || 0);
+      if (user) {
+        user.balance = Number(user.balance || 0) + Number(order.price || 0);
+        updatedUser = publicUser(user);
+      }
       order.refunded = true;
       order.refundedAt = new Date().toISOString();
       order.refundReason = "expired_no_otp";
@@ -486,7 +500,7 @@ app.post("/api/orders/:id/check-code", async (req, res) => {
   }
 
   await writeData(data);
-  res.json({ order, api });
+  res.json({ order, api, user: updatedUser });
 });
 
 app.post("/api/orders/:id/cancel", async (req, res) => {
@@ -498,10 +512,15 @@ app.post("/api/orders/:id/cancel", async (req, res) => {
 
   const api = await callChay({ act: "expired", id: order.providerQueueId });
 
+  let updatedUser = null;
+
   if (api.ResponseCode === 0) {
     if (!order.refunded) {
       const user = data.users.find(u => u.id === order.userId);
-      if (user) user.balance = Number(user.balance || 0) + Number(order.price || 0);
+      if (user) {
+        user.balance = Number(user.balance || 0) + Number(order.price || 0);
+        updatedUser = publicUser(user);
+      }
       order.refunded = true;
       order.refundedAt = new Date().toISOString();
       order.refundReason = "user_cancel";
@@ -510,7 +529,7 @@ app.post("/api/orders/:id/cancel", async (req, res) => {
   }
 
   await writeData(data);
-  res.json({ order, api });
+  res.json({ order, api, user: updatedUser });
 });
 
 app.post("/api/topups", async (req, res) => {
