@@ -1,11 +1,16 @@
 import express from "express";
 import cors from "cors";
-import fs from "fs";
+import { MongoClient } from "mongodb";
 import path from "path";
 
 const app = express();
 const PORT = process.env.PORT || 10000;
-const DATA_FILE = "./data.json";
+const MONGODB_URI = process.env.MONGODB_URI;
+const DB_NAME = process.env.MONGODB_DB || "otp24h";
+const DATA_COLLECTION = "appdata";
+
+let mongoClient;
+let mongoCollection;
 
 const CHAY_API_KEY = process.env.CHAYCODESO3_API_KEY || "248c26ea0cd1371009db5dd443339ca1";
 const CHAY_API_BASE = "https://chaycodeso3.com/api";
@@ -37,27 +42,49 @@ const defaultData = {
   topups: []
 };
 
-function readData() {
-  if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify(defaultData, null, 2));
-  try {
-    const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-    return {
-      ...defaultData,
-      ...data,
-      settings: { ...defaultData.settings, ...(data.settings || {}) },
-      users: data.users || defaultData.users,
-      serviceOverrides: data.serviceOverrides || {},
-      orders: data.orders || [],
-      topups: data.topups || []
-    };
-  } catch {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(defaultData, null, 2));
-    return defaultData;
+async function getCollection() {
+  if (!MONGODB_URI) {
+    throw new Error("Missing MONGODB_URI. Add it in Render Environment.");
   }
+
+  if (!mongoClient) {
+    mongoClient = new MongoClient(MONGODB_URI);
+    await mongoClient.connect();
+    mongoCollection = mongoClient.db(DB_NAME).collection(DATA_COLLECTION);
+    await mongoCollection.createIndex({ id: 1 }, { unique: true });
+  }
+
+  return mongoCollection;
 }
 
-function writeData(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+async function readData() {
+  const collection = await getCollection();
+  let doc = await collection.findOne({ id: "main" });
+
+  if (!doc) {
+    doc = { id: "main", ...defaultData };
+    await collection.insertOne(doc);
+  }
+
+  return {
+    ...defaultData,
+    ...doc,
+    settings: { ...defaultData.settings, ...(doc.settings || {}) },
+    users: doc.users || defaultData.users,
+    serviceOverrides: doc.serviceOverrides || {},
+    orders: doc.orders || [],
+    topups: doc.topups || []
+  };
+}
+
+async function writeData(data) {
+  const collection = await getCollection();
+  const { _id, ...clean } = data;
+  await collection.updateOne(
+    { id: "main" },
+    { $set: { ...clean, id: "main", updatedAt: new Date().toISOString() } },
+    { upsert: true }
+  );
 }
 
 function publicUser(user) {
@@ -65,8 +92,8 @@ function publicUser(user) {
   return safe;
 }
 
-function requireAdmin(req, res, next) {
-  const data = readData();
+async function requireAdmin(req, res, next) {
+  const data = await readData();
   const user = data.users.find(u => u.id === req.headers["x-user-id"] && u.role === "admin");
   if (!user) return res.status(403).json({ message: "Bạn không có quyền admin" });
   req.data = data;
@@ -312,18 +339,18 @@ async function cancelAtProvider(order) {
   return { ok: Number(api.status) === 200, api };
 }
 
-app.get("/api/settings", (req, res) => res.json(readData().settings));
+app.get("/api/settings", async (req, res) => res.json((await readData()).settings));
 
-app.put("/api/settings", requireAdmin, (req, res) => {
+app.put("/api/settings", requireAdmin, async (req, res) => {
   const data = req.data;
   data.settings = { ...data.settings, ...req.body };
-  writeData(data);
+  await writeData(data);
   res.json(data.settings);
 });
 
-app.post("/api/register", (req, res) => {
+app.post("/api/register", async (req, res) => {
   const { username, password } = req.body;
-  const data = readData();
+  const data = await readData();
 
   if (!username || !password) return res.status(400).json({ message: "Thiếu tài khoản hoặc mật khẩu" });
 
@@ -341,14 +368,14 @@ app.post("/api/register", (req, res) => {
   };
 
   data.users.push(user);
-  writeData(data);
+  await writeData(data);
 
   res.json(publicUser(user));
 });
 
-app.post("/api/login", (req, res) => {
+app.post("/api/login", async (req, res) => {
   const { username, password } = req.body;
-  const data = readData();
+  const data = await readData();
 
   const user = data.users.find(
     u => u.username.toLowerCase() === String(username || "").toLowerCase() && u.password === String(password || "")
@@ -359,9 +386,9 @@ app.post("/api/login", (req, res) => {
   res.json(publicUser(user));
 });
 
-app.post("/api/change-password", (req, res) => {
+app.post("/api/change-password", async (req, res) => {
   const { userId, oldPassword, newPassword } = req.body;
-  const data = readData();
+  const data = await readData();
   const user = data.users.find(u => u.id === userId);
 
   if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
@@ -369,13 +396,13 @@ app.post("/api/change-password", (req, res) => {
   if (!newPassword) return res.status(400).json({ message: "Thiếu mật khẩu mới" });
 
   user.password = String(newPassword);
-  writeData(data);
+  await writeData(data);
   res.json({ message: "Đổi mật khẩu thành công" });
 });
 
-app.get("/api/users", requireAdmin, (req, res) => res.json(req.data.users.map(publicUser)));
+app.get("/api/users", requireAdmin, async (req, res) => res.json(req.data.users.map(publicUser)));
 
-app.post("/api/users/:id/adjust-balance", requireAdmin, (req, res) => {
+app.post("/api/users/:id/adjust-balance", requireAdmin, async (req, res) => {
   const data = req.data;
   const user = data.users.find(u => u.id === req.params.id);
   const amount = Number(req.body.amount || 0);
@@ -384,12 +411,12 @@ app.post("/api/users/:id/adjust-balance", requireAdmin, (req, res) => {
   if (Number.isNaN(amount)) return res.status(400).json({ message: "Số tiền không hợp lệ" });
 
   user.balance = Math.max(0, Number(user.balance || 0) + amount);
-  writeData(data);
+  await writeData(data);
 
   res.json(publicUser(user));
 });
 
-app.put("/api/users/:id", requireAdmin, (req, res) => {
+app.put("/api/users/:id", requireAdmin, async (req, res) => {
   const data = req.data;
   const user = data.users.find(u => u.id === req.params.id);
 
@@ -398,11 +425,11 @@ app.put("/api/users/:id", requireAdmin, (req, res) => {
   if (req.body.password) user.password = String(req.body.password);
   if (req.body.balance !== undefined) user.balance = Math.max(0, Number(req.body.balance));
 
-  writeData(data);
+  await writeData(data);
   res.json(publicUser(user));
 });
 
-app.delete("/api/users/:id", requireAdmin, (req, res) => {
+app.delete("/api/users/:id", requireAdmin, async (req, res) => {
   const data = req.data;
   const user = data.users.find(u => u.id === req.params.id);
 
@@ -410,7 +437,7 @@ app.delete("/api/users/:id", requireAdmin, (req, res) => {
   if (user.role === "admin") return res.status(400).json({ message: "Không thể xóa admin" });
 
   data.users = data.users.filter(u => u.id !== req.params.id);
-  writeData(data);
+  await writeData(data);
 
   res.json({ success: true });
 });
@@ -428,7 +455,7 @@ app.get("/api/provider/account", requireAdmin, async (req, res) => {
 });
 
 app.get("/api/services", async (req, res) => {
-  const data = readData();
+  const data = await readData();
   const { sources, errors } = await getAllSources();
 
   if (sources.length === 0) return res.status(502).json({ message: "Không tải được dịch vụ từ cả 2 nguồn", errors });
@@ -448,7 +475,7 @@ app.get("/api/admin/services", requireAdmin, async (req, res) => {
   });
 });
 
-app.put("/api/admin/services/:id", requireAdmin, (req, res) => {
+app.put("/api/admin/services/:id", requireAdmin, async (req, res) => {
   const data = req.data;
   const id = String(req.params.id);
 
@@ -457,13 +484,13 @@ app.put("/api/admin/services/:id", requireAdmin, (req, res) => {
     ...req.body
   };
 
-  writeData(data);
+  await writeData(data);
   res.json(data.serviceOverrides[id]);
 });
 
 app.post("/api/orders", async (req, res) => {
   const { userId, appId, carrier, prefix, sendsms, number } = req.body;
-  const data = readData();
+  const data = await readData();
   const user = data.users.find(u => u.id === userId);
 
   if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
@@ -525,13 +552,13 @@ app.post("/api/orders", async (req, res) => {
   };
 
   data.orders.unshift(order);
-  writeData(data);
+  await writeData(data);
 
   res.json({ order, user: publicUser(user), attempts });
 });
 
-app.get("/api/orders", (req, res) => {
-  const data = readData();
+app.get("/api/orders", async (req, res) => {
+  const data = await readData();
   const user = data.users.find(u => u.id === req.query.userId);
 
   if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
@@ -540,7 +567,7 @@ app.get("/api/orders", (req, res) => {
 });
 
 app.post("/api/orders/:id/check-code", async (req, res) => {
-  const data = readData();
+  const data = await readData();
   const order = data.orders.find(o => o.id === req.params.id);
 
   if (!order) return res.status(404).json({ message: "Không tìm thấy order" });
@@ -556,12 +583,12 @@ app.post("/api/orders/:id/check-code", async (req, res) => {
     order.status = "expired";
   }
 
-  writeData(data);
+  await writeData(data);
   res.json({ order, api: result.api });
 });
 
 app.post("/api/orders/:id/cancel", async (req, res) => {
-  const data = readData();
+  const data = await readData();
   const order = data.orders.find(o => o.id === req.params.id);
 
   if (!order) return res.status(404).json({ message: "Không tìm thấy order" });
@@ -575,13 +602,13 @@ app.post("/api/orders/:id/cancel", async (req, res) => {
     order.status = "canceled";
   }
 
-  writeData(data);
+  await writeData(data);
   res.json({ order, api: result.api });
 });
 
-app.post("/api/topups", (req, res) => {
+app.post("/api/topups", async (req, res) => {
   const { userId, amount, note } = req.body;
-  const data = readData();
+  const data = await readData();
   const user = data.users.find(u => u.id === userId);
 
   if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
@@ -600,13 +627,13 @@ app.post("/api/topups", (req, res) => {
   };
 
   data.topups.unshift(topup);
-  writeData(data);
+  await writeData(data);
 
   res.json(topup);
 });
 
-app.get("/api/topups", (req, res) => {
-  const data = readData();
+app.get("/api/topups", async (req, res) => {
+  const data = await readData();
   const user = data.users.find(u => u.id === req.query.userId);
 
   if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
@@ -614,7 +641,7 @@ app.get("/api/topups", (req, res) => {
   res.json(user.role === "admin" ? data.topups : data.topups.filter(t => t.userId === user.id));
 });
 
-app.post("/api/topups/:id/approve", requireAdmin, (req, res) => {
+app.post("/api/topups/:id/approve", requireAdmin, async (req, res) => {
   const data = req.data;
   const topup = data.topups.find(t => t.id === req.params.id);
 
@@ -629,11 +656,11 @@ app.post("/api/topups/:id/approve", requireAdmin, (req, res) => {
   topup.approvedAt = new Date().toISOString();
   topup.approvedBy = req.admin.username;
 
-  writeData(data);
+  await writeData(data);
   res.json({ topup, user: publicUser(user) });
 });
 
-app.post("/api/topups/:id/reject", requireAdmin, (req, res) => {
+app.post("/api/topups/:id/reject", requireAdmin, async (req, res) => {
   const data = req.data;
   const topup = data.topups.find(t => t.id === req.params.id);
 
@@ -645,8 +672,17 @@ app.post("/api/topups/:id/reject", requireAdmin, (req, res) => {
   topup.rejectedBy = req.admin.username;
   topup.rejectReason = req.body.reason || "";
 
-  writeData(data);
+  await writeData(data);
   res.json(topup);
+});
+
+app.get("/api/db-status", async (req, res) => {
+  try {
+    await getCollection();
+    res.json({ ok: true, db: DB_NAME });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: error.message });
+  }
 });
 
 const distPath = path.resolve("dist");
