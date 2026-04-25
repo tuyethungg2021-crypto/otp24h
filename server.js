@@ -12,15 +12,22 @@ app.use(express.json());
 
 function readUsers() {
   if (!fs.existsSync(USERS_FILE)) {
-    fs.writeFileSync(USERS_FILE, JSON.stringify([
-      {
-        id: "admin",
-        username: "admin",
-        password: "admin123",
-        role: "admin",
-        balance: 0
-      }
-    ], null, 2));
+    fs.writeFileSync(
+      USERS_FILE,
+      JSON.stringify(
+        [
+          {
+            id: "admin-1",
+            username: "admin",
+            password: "hung0385601880",
+            role: "admin",
+            balance: 0
+          }
+        ],
+        null,
+        2
+      )
+    );
   }
 
   return JSON.parse(fs.readFileSync(USERS_FILE, "utf8"));
@@ -30,17 +37,19 @@ function writeUsers(users) {
   fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
 }
 
+app.get("/api/users", (req, res) => {
+  res.json(readUsers());
+});
+
 app.post("/api/register", (req, res) => {
   const { username, password } = req.body;
-
-  if (!username || !password) {
-    return res.status(400).json({ message: "Thiếu username hoặc password" });
-  }
-
   const users = readUsers();
 
-  const existed = users.find(u => u.username === username);
-  if (existed) {
+  if (!username || !password) {
+    return res.status(400).json({ message: "Thiếu tài khoản hoặc mật khẩu" });
+  }
+
+  if (users.find(u => u.username === username)) {
     return res.status(409).json({ message: "Tài khoản đã tồn tại" });
   }
 
@@ -71,10 +80,6 @@ app.post("/api/login", (req, res) => {
   res.json(user);
 });
 
-app.get("/api/users", (req, res) => {
-  res.json(readUsers());
-});
-
 app.put("/api/users/:id", (req, res) => {
   const users = readUsers();
   const index = users.findIndex(u => u.id === req.params.id);
@@ -93,10 +98,8 @@ app.put("/api/users/:id", (req, res) => {
 });
 
 app.delete("/api/users/:id", (req, res) => {
-  const users = readUsers();
-  const newUsers = users.filter(u => u.id !== req.params.id);
-
-  writeUsers(newUsers);
+  const users = readUsers().filter(u => u.id !== req.params.id);
+  writeUsers(users);
   res.json({ success: true });
 });
 
