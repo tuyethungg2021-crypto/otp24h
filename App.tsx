@@ -197,6 +197,7 @@ export default function App() {
   };
 
   const filteredServices = useMemo(() => services.filter(s => s.name.toLowerCase().includes(search.toLowerCase())), [services, search]);
+  const waitingOrders = orders.filter(o => o.status === "waiting");
 
   if (!user) {
     return (
@@ -247,6 +248,38 @@ export default function App() {
           <Card title="Vai trò" value={user.role} />
           <Card title="Số dư" value={`${user.balance.toLocaleString("vi-VN")}đ`} />
         </div>
+
+        {waitingOrders.length > 0 && (
+          <div className="mb-6 bg-indigo-600 text-white rounded-3xl p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-2xl font-black">📱 Số đang chờ OTP</h2>
+              <button onClick={loadOrders} className="bg-white/20 rounded-xl px-4 py-2 font-bold">Tải lại</button>
+            </div>
+
+            <div className="space-y-3">
+              {waitingOrders.map(o => (
+                <div key={o.id} className="bg-white/15 rounded-2xl p-4 flex flex-col md:flex-row md:justify-between md:items-center gap-4">
+                  <div>
+                    <div className="text-3xl font-black tracking-wide">{o.number}</div>
+                    <div className="text-sm opacity-90 mt-1">
+                      Dịch vụ: {o.appName} | Giá: {o.price.toLocaleString("vi-VN")}đ
+                    </div>
+                    {o.sms && <div className="mt-2 text-sm">SMS: {o.sms}</div>}
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button onClick={() => checkCode(o)} className="bg-white text-indigo-700 rounded-xl px-4 py-2 font-black">
+                      Check OTP
+                    </button>
+                    <button onClick={() => cancelOrder(o)} className="bg-rose-600 text-white rounded-xl px-4 py-2 font-black">
+                      Hủy
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {settings.announcement && <div className="bg-amber-50 border border-amber-200 rounded-3xl p-5 mb-6 font-semibold">{settings.announcement}</div>}
         {settings.bannerImage && <img src={settings.bannerImage} className="w-full max-h-72 object-cover rounded-3xl mb-6" />}
