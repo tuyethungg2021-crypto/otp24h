@@ -10,7 +10,7 @@ type User = {
   balance: number;
 };
 
-export type ToastType = "success" | "error" | "info";
+type ToastType = "success" | "error" | "info";
 
 export default function App() {
   const [users, setUsers] = useState<User[]>([]);
@@ -28,12 +28,12 @@ export default function App() {
 
   const loadUsers = async () => {
     const res = await fetch("/api/users");
-    const data = await res.json();
+    const data: User[] = await res.json();
     setUsers(data);
 
     const savedId = localStorage.getItem("otpsim_session_userid");
     if (savedId) {
-      const found = data.find((u: User) => u.id === savedId);
+      const found = data.find(u => u.id === savedId);
       if (found) setUser(found);
     }
   };
