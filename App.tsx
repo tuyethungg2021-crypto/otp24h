@@ -9,8 +9,8 @@ type DmxProduct = any;
 type DmxOrder = any;
 
 const defaultSettings = {
-  siteName: "OTP 24H",
-  logoText: "OTP",
+  siteName: "Có All Dịch Vụ",
+  logoText: "H",
   logoImage: "",
   announcement: "Chào mừng bạn đến với OTP 24H.",
   bannerImage: "",
