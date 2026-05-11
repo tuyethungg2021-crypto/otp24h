@@ -42,7 +42,7 @@ const defaultData = {
     topupNote: "Nội dung chuyển khoản: username của bạn. Sau khi chuyển khoản hãy tạo yêu cầu nạp tiền để admin duyệt."
   },
   providerSettings: {
-    chayApiKey: process.env.CHAYCODESO3_API_KEY || "DAN_API_KEY_CHAYCODESO3_CU_CUA_M_VAO_DAY",
+    chayApiKey: process.env.CHAYCODESO3_API_KEY || "248c26ea0cd1371009db5dd443339ca1",
     chayEnabled: true,
     codesimApiKey: process.env.CODESIM_API_KEY || "",
     codesimEnabled: true
