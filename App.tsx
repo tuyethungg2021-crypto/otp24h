@@ -360,7 +360,10 @@ export default function App() {
 
       const list: Order[] = await latest.json();
 
-      for (const order of list.filter(o => o.status === "waiting")) {
+      for (const order of list.filter(o => {
+        const status = String(o.status || "").toLowerCase();
+        return ["waiting", "pending", "processing"].includes(status);
+      })) {
         await fetch(`/api/orders/${order.id}/check-code`, { method: "POST", headers });
       }
 
@@ -368,7 +371,7 @@ export default function App() {
     }, 5000);
 
     return () => window.clearInterval(timer);
-  }, [user]);
+  }, [user, token]);
 
   const login = async (e: React.FormEvent) => {
     e.preventDefault();
