@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import path from "path";
+import crypto from "crypto";
 import { MongoClient } from "mongodb";
 
 const app = express();
@@ -17,13 +18,21 @@ let mongoCollection;
 
 app.use(cors());
 app.use(express.json({ limit: "15mb" }));
+app.set("trust proxy", 1);
+
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  next();
+});
 
 const defaultData = {
   users: [
     {
       id: "admin-1",
       username: "admin",
-      password: "azhung12",
+      password: process.env.ADMIN_PASSWORD || "azhung12",
       role: "admin",
       balance: 0,
       createdAt: new Date().toISOString()
@@ -98,18 +107,107 @@ async function writeData(data) {
   );
 }
 
+const AUTH_SECRET =
+  process.env.AUTH_SECRET ||
+  crypto
+    .createHash("sha256")
+    .update(String(process.env.MONGODB_URI || "otp24h-dev-secret"))
+    .digest("hex");
+
+function base64url(input) {
+  return Buffer.from(JSON.stringify(input)).toString("base64url");
+}
+
+function signToken(payload) {
+  const header = { alg: "HS256", typ: "JWT" };
+  const body = {
+    ...payload,
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7
+  };
+
+  const unsigned = `${base64url(header)}.${base64url(body)}`;
+  const signature = crypto.createHmac("sha256", AUTH_SECRET).update(unsigned).digest("base64url");
+
+  return `${unsigned}.${signature}`;
+}
+
+function verifyToken(token) {
+  if (!token || typeof token !== "string") return null;
+
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+
+  const unsigned = `${parts[0]}.${parts[1]}`;
+  const expected = crypto.createHmac("sha256", AUTH_SECRET).update(unsigned).digest("base64url");
+
+  try {
+    if (!crypto.timingSafeEqual(Buffer.from(parts[2]), Buffer.from(expected))) return null;
+  } catch {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+    if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function getBearerToken(req) {
+  const value = req.headers.authorization || "";
+  if (!value.startsWith("Bearer ")) return "";
+  return value.slice("Bearer ".length).trim();
+}
+
+function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
+  const hash = crypto.scryptSync(String(password), salt, 64).toString("hex");
+  return `scrypt$${salt}$${hash}`;
+}
+
+function verifyPassword(user, password) {
+  if (user.passwordHash) {
+    const parts = String(user.passwordHash).split("$");
+    if (parts.length !== 3 || parts[0] !== "scrypt") return false;
+
+    const expected = hashPassword(password, parts[1]);
+    try {
+      return crypto.timingSafeEqual(Buffer.from(user.passwordHash), Buffer.from(expected));
+    } catch {
+      return false;
+    }
+  }
+
+  // Tự động hỗ trợ tài khoản cũ đang lưu mật khẩu dạng chữ thường.
+  return user.password === String(password || "");
+}
+
 function publicUser(user) {
-  const { password, ...safe } = user;
+  const { password, passwordHash, ...safe } = user;
   return safe;
 }
 
-async function requireAdmin(req, res, next) {
+async function requireAuth(req, res, next) {
+  const payload = verifyToken(getBearerToken(req));
+  if (!payload?.userId) return res.status(401).json({ message: "Phiên đăng nhập không hợp lệ, vui lòng đăng nhập lại" });
+
   const data = await readData();
-  const user = data.users.find(u => u.id === req.headers["x-user-id"] && u.role === "admin");
-  if (!user) return res.status(403).json({ message: "Bạn không có quyền admin" });
+  const user = data.users.find(u => u.id === payload.userId);
+  if (!user) return res.status(401).json({ message: "Không tìm thấy tài khoản" });
+
   req.data = data;
-  req.admin = user;
+  req.user = user;
   next();
+}
+
+async function requireAdmin(req, res, next) {
+  await requireAuth(req, res, () => {
+    if (req.user?.role !== "admin") return res.status(403).json({ message: "Bạn không có quyền admin" });
+    req.admin = req.user;
+    next();
+  });
 }
 
 function normalizeName(name) {
@@ -265,7 +363,32 @@ async function getAllServices(data) {
 }
 
 function getClientIp(req) {
-  return req.headers["x-forwarded-for"] || req.socket.remoteAddress || "";
+  return String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim();
+}
+
+const loginAttempts = new Map();
+
+function rateLimitLogin(req, res, next) {
+  const ip = getClientIp(req) || "unknown";
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000;
+  const maxAttempts = 20;
+
+  const record = loginAttempts.get(ip) || { count: 0, resetAt: now + windowMs };
+
+  if (record.resetAt < now) {
+    record.count = 0;
+    record.resetAt = now + windowMs;
+  }
+
+  record.count += 1;
+  loginAttempts.set(ip, record);
+
+  if (record.count > maxAttempts) {
+    return res.status(429).json({ message: "Đăng nhập quá nhiều lần, vui lòng thử lại sau" });
+  }
+
+  next();
 }
 
 app.get("/api/db-status", async (req, res) => {
@@ -391,14 +514,18 @@ app.post("/api/register", async (req, res) => {
     return res.status(400).json({ message: "Thiếu tài khoản hoặc mật khẩu" });
   }
 
+  if (String(password).length < 6) {
+    return res.status(400).json({ message: "Mật khẩu phải có ít nhất 6 ký tự" });
+  }
+
   if (data.users.find(u => u.username.toLowerCase() === String(username).toLowerCase())) {
     return res.status(409).json({ message: "Tài khoản đã tồn tại" });
   }
 
   const user = {
-    id: "u-" + Date.now(),
+    id: "u-" + crypto.randomBytes(12).toString("hex"),
     username: String(username),
-    password: String(password),
+    passwordHash: hashPassword(password),
     role: "user",
     balance: 0,
     createdAt: new Date().toISOString(),
@@ -407,42 +534,53 @@ app.post("/api/register", async (req, res) => {
 
   data.users.push(user);
   await writeData(data);
-  res.json(publicUser(user));
+
+  res.json({
+    token: signToken({ userId: user.id }),
+    user: publicUser(user)
+  });
 });
 
-app.post("/api/login", async (req, res) => {
+app.post("/api/login", rateLimitLogin, async (req, res) => {
   const { username, password } = req.body;
   const data = await readData();
 
-  const user = data.users.find(
-    u =>
-      u.username.toLowerCase() === String(username || "").toLowerCase() &&
-      u.password === String(password || "")
-  );
+  const user = data.users.find(u => u.username.toLowerCase() === String(username || "").toLowerCase());
 
-  if (!user) return res.status(401).json({ message: "Sai tài khoản hoặc mật khẩu" });
-  res.json(publicUser(user));
+  if (!user || !verifyPassword(user, password)) {
+    return res.status(401).json({ message: "Sai tài khoản hoặc mật khẩu" });
+  }
+
+  // Nâng cấp tài khoản cũ từ password plaintext sang passwordHash.
+  if (!user.passwordHash) {
+    user.passwordHash = hashPassword(password);
+    delete user.password;
+    await writeData(data);
+  }
+
+  res.json({
+    token: signToken({ userId: user.id }),
+    user: publicUser(user)
+  });
 });
 
-app.post("/api/change-password", async (req, res) => {
-  const { userId, oldPassword, newPassword } = req.body;
-  const data = await readData();
+app.post("/api/change-password", requireAuth, async (req, res) => {
+  const { oldPassword, newPassword } = req.body;
+  const data = req.data;
+  const user = req.user;
 
-  const user = data.users.find(u => u.id === userId);
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
-  if (user.password !== oldPassword) return res.status(400).json({ message: "Mật khẩu cũ không đúng" });
-  if (!newPassword) return res.status(400).json({ message: "Thiếu mật khẩu mới" });
+  if (!verifyPassword(user, oldPassword)) return res.status(400).json({ message: "Mật khẩu cũ không đúng" });
+  if (!newPassword || String(newPassword).length < 6) return res.status(400).json({ message: "Mật khẩu mới phải có ít nhất 6 ký tự" });
 
-  user.password = String(newPassword);
+  user.passwordHash = hashPassword(newPassword);
+  delete user.password;
+
   await writeData(data);
   res.json({ message: "Đổi mật khẩu thành công" });
 });
 
-app.get("/api/me", async (req, res) => {
-  const data = await readData();
-  const user = data.users.find(u => u.id === req.query.userId);
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
-  res.json(publicUser(user));
+app.get("/api/me", requireAuth, async (req, res) => {
+  res.json(publicUser(req.user));
 });
 
 app.get("/api/users", requireAdmin, async (req, res) => {
@@ -468,7 +606,10 @@ app.put("/api/users/:id", requireAdmin, async (req, res) => {
 
   if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
 
-  if (req.body.password) user.password = String(req.body.password);
+  if (req.body.password) {
+    user.passwordHash = hashPassword(req.body.password);
+    delete user.password;
+  }
   if (req.body.balance !== undefined) user.balance = Math.max(0, Number(req.body.balance));
 
   await writeData(data);
@@ -574,12 +715,10 @@ app.put("/api/admin/services/:id", requireAdmin, async (req, res) => {
   res.json(data.serviceOverrides[id]);
 });
 
-app.post("/api/orders", async (req, res) => {
-  const { userId, appId, carrier, prefix, sendsms, number, networkId } = req.body;
-  const data = await readData();
-
-  const user = data.users.find(u => u.id === userId);
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+app.post("/api/orders", requireAuth, async (req, res) => {
+  const { appId, carrier, prefix, sendsms, number, networkId } = req.body;
+  const data = req.data;
+  const user = req.user;
 
   const { services, errors } = await getAllServices(data);
   const service = services
@@ -682,11 +821,9 @@ app.post("/api/orders", async (req, res) => {
   });
 });
 
-app.get("/api/orders", async (req, res) => {
-  const data = await readData();
-  const user = data.users.find(u => u.id === req.query.userId);
-
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+app.get("/api/orders", requireAuth, async (req, res) => {
+  const data = req.data;
+  const user = req.user;
 
   res.json(
     user.role === "admin"
@@ -695,11 +832,14 @@ app.get("/api/orders", async (req, res) => {
   );
 });
 
-app.post("/api/orders/:id/check-code", async (req, res) => {
-  const data = await readData();
+app.post("/api/orders/:id/check-code", requireAuth, async (req, res) => {
+  const data = req.data;
   const order = data.orders.find(o => o.id === req.params.id);
 
   if (!order) return res.status(404).json({ message: "Không tìm thấy order" });
+  if (req.user.role !== "admin" && order.userId !== req.user.id) {
+    return res.status(403).json({ message: "Bạn không có quyền xem đơn này" });
+  }
 
   let api;
   let updatedUser = null;
@@ -753,8 +893,8 @@ app.post("/api/orders/:id/check-code", async (req, res) => {
   });
 });
 
-app.post("/api/orders/:id/cancel", async (req, res) => {
-  const data = await readData();
+app.post("/api/orders/:id/cancel", requireAdmin, async (req, res) => {
+  const data = req.data;
   const order = data.orders.find(o => o.id === req.params.id);
 
   if (!order) return res.status(404).json({ message: "Không tìm thấy order" });
@@ -802,11 +942,14 @@ app.post("/api/orders/:id/cancel", async (req, res) => {
   });
 });
 
-app.post("/api/orders/:id/reuse", async (req, res) => {
-  const data = await readData();
+app.post("/api/orders/:id/reuse", requireAuth, async (req, res) => {
+  const data = req.data;
   const order = data.orders.find(o => o.id === req.params.id);
 
   if (!order) return res.status(404).json({ message: "Không tìm thấy order" });
+  if (req.user.role !== "admin" && order.userId !== req.user.id) {
+    return res.status(403).json({ message: "Bạn không có quyền thuê lại đơn này" });
+  }
   if (order.provider !== "codesim") return res.status(400).json({ message: "Thuê lại chỉ hỗ trợ CodeSim" });
   if (order.status !== "done") return res.status(400).json({ message: "Chỉ thuê lại số đã lấy code thành công" });
 
@@ -863,12 +1006,10 @@ app.post("/api/orders/:id/reuse", async (req, res) => {
   });
 });
 
-app.post("/api/topups", async (req, res) => {
-  const { userId, amount, note } = req.body;
-  const data = await readData();
-
-  const user = data.users.find(u => u.id === userId);
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+app.post("/api/topups", requireAuth, async (req, res) => {
+  const { amount, note } = req.body;
+  const data = req.data;
+  const user = req.user;
 
   const money = Number(amount || 0);
   if (!money || Number.isNaN(money) || money <= 0) {
@@ -877,7 +1018,7 @@ app.post("/api/topups", async (req, res) => {
 
   const topup = {
     id: "t-" + Date.now(),
-    userId,
+    userId: user.id,
     username: user.username,
     amount: money,
     note: note || "",
@@ -891,11 +1032,9 @@ app.post("/api/topups", async (req, res) => {
   res.json(topup);
 });
 
-app.get("/api/topups", async (req, res) => {
-  const data = await readData();
-  const user = data.users.find(u => u.id === req.query.userId);
-
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+app.get("/api/topups", requireAuth, async (req, res) => {
+  const data = req.data;
+  const user = req.user;
 
   res.json(
     user.role === "admin"
@@ -1014,11 +1153,9 @@ app.get("/api/dmx/products", async (req, res) => {
   res.json(products);
 });
 
-app.get("/api/dmx/orders", async (req, res) => {
-  const data = await readData();
-  const user = data.users.find(u => u.id === req.query.userId);
-
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+app.get("/api/dmx/orders", requireAuth, async (req, res) => {
+  const data = req.data;
+  const user = req.user;
 
   if (user.role === "admin") {
     return res.json(data.dmxOrders || []);
@@ -1027,13 +1164,11 @@ app.get("/api/dmx/orders", async (req, res) => {
   res.json((data.dmxOrders || []).filter(o => o.userId === user.id));
 });
 
-app.post("/api/dmx/buy", async (req, res) => {
-  const { userId, productId } = req.body;
+app.post("/api/dmx/buy", requireAuth, async (req, res) => {
+  const { productId } = req.body;
   const quantity = Math.floor(Number(req.body.quantity || 1));
-  const data = await readData();
-
-  const user = data.users.find(u => u.id === userId);
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+  const data = req.data;
+  const user = req.user;
 
   const product = (data.dmxProducts || []).find(p => p.id === productId);
   if (!product) return res.status(404).json({ message: "Sản phẩm không tồn tại" });
