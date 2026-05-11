@@ -38,10 +38,17 @@ type Order = {
   refundReason?: string;
 };
 
+type BulkPrice = {
+  minQty: number;
+  price: number;
+};
+
 type DmxProduct = {
   id: string;
   name: string;
   price: number;
+  category?: string;
+  bulkPricing?: BulkPrice[];
   image?: string;
   note?: string;
   stock?: number;
@@ -58,8 +65,12 @@ type DmxOrder = {
   productId?: string;
   productName: string;
   price: number;
+  unitPrice?: number;
+  quantity?: number;
+  category?: string;
   image?: string;
   code: string;
+  codes?: string[];
   note?: string;
   createdAt: string;
 };
@@ -122,6 +133,46 @@ const carriers = [
 
 const money = (n: number) => Number(n || 0).toLocaleString("vi-VN") + "đ";
 
+const bulkPricingToText = (bulkPricing?: BulkPrice[]) =>
+  (bulkPricing || [])
+    .sort((a, b) => Number(a.minQty || 0) - Number(b.minQty || 0))
+    .map(tier => `${tier.minQty}=${tier.price}`)
+    .join("\n");
+
+const parseBulkPricingText = (text: string): BulkPrice[] =>
+  String(text || "")
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => {
+      const parts = line.split(/[=|:,\s]+/).filter(Boolean);
+      return { minQty: Number(parts[0] || 0), price: Number(parts[1] || 0) };
+    })
+    .filter(tier => tier.minQty > 1 && tier.price > 0)
+    .sort((a, b) => a.minQty - b.minQty);
+
+const getDmxUnitPrice = (product: DmxProduct, qty = 1) => {
+  const tiers = [...(product.bulkPricing || [])]
+    .filter(tier => Number(tier.minQty || 0) <= qty && Number(tier.price || 0) > 0)
+    .sort((a, b) => Number(b.minQty || 0) - Number(a.minQty || 0));
+
+  return Number(tiers[0]?.price || product.price || 0);
+};
+
+const getDmxPriceText = (product: DmxProduct) => {
+  const bestBulk = [...(product.bulkPricing || [])]
+    .filter(tier => Number(tier.price || 0) > 0)
+    .sort((a, b) => Number(a.price || 0) - Number(b.price || 0))[0];
+
+  if (bestBulk && bestBulk.price < product.price) {
+    return `${money(bestBulk.price)} - ${money(product.price)}`;
+  }
+
+  return money(product.price);
+};
+
+const getDmxCategory = (product: DmxProduct) => product.category || "Chưa phân loại";
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
@@ -133,8 +184,11 @@ export default function App() {
 
   const [dmxProducts, setDmxProducts] = useState<DmxProduct[]>([]);
   const [dmxOrders, setDmxOrders] = useState<DmxOrder[]>([]);
+  const [dmxSearch, setDmxSearch] = useState("");
   const [newDmxName, setNewDmxName] = useState("");
   const [newDmxPrice, setNewDmxPrice] = useState("");
+  const [newDmxCategory, setNewDmxCategory] = useState("");
+  const [newDmxBulkPricing, setNewDmxBulkPricing] = useState("");
   const [newDmxImage, setNewDmxImage] = useState("");
   const [newDmxNote, setNewDmxNote] = useState("");
 
@@ -606,14 +660,30 @@ export default function App() {
   const buyDmx = async (product: DmxProduct) => {
     if (!user) return;
 
-    if (!confirm(`Mua ${product.name} giá ${money(product.price)}?`)) return;
+    const rawQty = prompt(`Nhập số lượng muốn mua cho ${product.name}`, "1");
+    if (!rawQty) return;
+
+    const quantity = Math.floor(Number(rawQty));
+    if (!quantity || Number.isNaN(quantity) || quantity <= 0) {
+      return show("Số lượng không hợp lệ");
+    }
+
+    if (quantity > Number(product.stock || 0)) {
+      return show("Kho không đủ số lượng cần mua");
+    }
+
+    const unitPrice = getDmxUnitPrice(product, quantity);
+    const totalPrice = unitPrice * quantity;
+
+    if (!confirm(`Mua ${quantity} x ${product.name}?\nĐơn giá: ${money(unitPrice)}\nTổng tiền: ${money(totalPrice)}`)) return;
 
     const res = await fetch("/api/dmx/buy", {
       method: "POST",
       headers,
       body: JSON.stringify({
         userId: user.id,
-        productId: product.id
+        productId: product.id,
+        quantity
       })
     });
 
@@ -635,6 +705,8 @@ export default function App() {
       body: JSON.stringify({
         name: newDmxName,
         price: Number(newDmxPrice || 0),
+        category: newDmxCategory,
+        bulkPricing: parseBulkPricingText(newDmxBulkPricing),
         image: newDmxImage,
         note: newDmxNote
       })
@@ -646,6 +718,8 @@ export default function App() {
 
     setNewDmxName("");
     setNewDmxPrice("");
+    setNewDmxCategory("");
+    setNewDmxBulkPricing("");
     setNewDmxImage("");
     setNewDmxNote("");
 
@@ -732,6 +806,18 @@ export default function App() {
           .includes(adminServiceSearch.toLowerCase())
       ),
     [adminServices, adminServiceSearch]
+  );
+
+  const filteredDmxProducts = useMemo(
+    () =>
+      [...dmxProducts]
+        .filter(p => `${p.name} ${p.category || ""} ${p.note || ""}`.toLowerCase().includes(dmxSearch.toLowerCase()))
+        .sort((a, b) => {
+          const categoryCompare = getDmxCategory(a).localeCompare(getDmxCategory(b), "vi");
+          if (categoryCompare !== 0) return categoryCompare;
+          return String(a.name || "").localeCompare(String(b.name || ""), "vi");
+        }),
+    [dmxProducts, dmxSearch]
   );
 
   if (!user) {
@@ -917,18 +1003,43 @@ export default function App() {
 
         {tab === "dmx" && (
           <Panel title="Dịch vụ DMX">
+            <div className="flex flex-col md:flex-row gap-3 mb-5">
+              <button onClick={loadDmxProducts} className="bg-slate-900 text-white rounded-2xl px-5 py-3 font-bold">Tải lại</button>
+              <input
+                value={dmxSearch}
+                onChange={e => setDmxSearch(e.target.value)}
+                className="flex-1 border rounded-2xl px-5 py-3"
+                placeholder="Tìm sản phẩm, phân loại hoặc ghi chú..."
+              />
+            </div>
+
+            {!filteredDmxProducts.length && (
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-4">Không tìm thấy sản phẩm DMX phù hợp hoặc sản phẩm đang hết hàng.</div>
+            )}
+
             <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {dmxProducts.map(p => (
+              {filteredDmxProducts.map(p => (
                 <div key={p.id} className="bg-white border rounded-3xl p-5 shadow-sm">
                   {p.image && <img src={p.image} className="w-full h-48 object-cover rounded-2xl mb-4" />}
 
                   <h3 className="text-xl font-black">{p.name}</h3>
 
-                  <p className="text-sm text-slate-500 mt-2">Còn {p.stock || 0} mã</p>
+                  <p className="text-sm text-slate-500 mt-2">Phân loại: {getDmxCategory(p)} | Còn {p.stock || 0} mã</p>
 
                   {p.note && <div className="bg-slate-100 rounded-2xl p-3 mt-3 text-sm whitespace-pre-wrap">{p.note}</div>}
 
-                  <p className="text-2xl font-black text-indigo-600 mt-4">{money(p.price)}</p>
+                  <p className="text-2xl font-black text-indigo-600 mt-4">{getDmxPriceText(p)}</p>
+
+                  {p.bulkPricing && p.bulkPricing.length > 0 && (
+                    <div className="mt-3 bg-indigo-50 border border-indigo-100 rounded-xl p-3 text-sm">
+                      <b>Giá mua nhiều:</b>
+                      <div className="mt-1 space-y-1">
+                        {p.bulkPricing.map(tier => (
+                          <p key={`${p.id}-${tier.minQty}`}>Từ {tier.minQty} mã: {money(tier.price)}/mã</p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   <button onClick={() => buyDmx(p)} className="mt-5 w-full bg-indigo-600 text-white rounded-2xl py-3 font-black">
                     Mua ngay
@@ -948,10 +1059,11 @@ export default function App() {
 
                       <div className="flex-1">
                         <h3 className="font-black text-xl">{o.productName}</h3>
-                        <p className="text-sm text-slate-500">Giá: {money(o.price)} | {new Date(o.createdAt).toLocaleString("vi-VN")}</p>
+                        <p className="text-sm text-slate-500">Số lượng: {o.quantity || 1} | Tổng tiền: {money(o.price)} | {new Date(o.createdAt).toLocaleString("vi-VN")}</p>
 
                         <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
-                          <b>Mã voucher: {o.code}</b>
+                          <b>Mã voucher:</b>
+                          <pre className="whitespace-pre-wrap mt-2 font-bold">{(o.codes && o.codes.length ? o.codes : [o.code]).join("\n")}</pre>
                         </div>
 
                         {o.note && <div className="mt-3 bg-slate-100 rounded-xl p-3 text-sm whitespace-pre-wrap">{o.note}</div>}
@@ -1138,7 +1250,16 @@ export default function App() {
             <div className="bg-white border rounded-3xl p-5 mb-6 space-y-4">
               <input value={newDmxName} onChange={e => setNewDmxName(e.target.value)} className="w-full border rounded-2xl px-5 py-4" placeholder="Tên sản phẩm" />
 
-              <input value={newDmxPrice} onChange={e => setNewDmxPrice(e.target.value)} className="w-full border rounded-2xl px-5 py-4" placeholder="Giá bán" />
+              <input value={newDmxPrice} onChange={e => setNewDmxPrice(e.target.value)} className="w-full border rounded-2xl px-5 py-4" placeholder="Giá bán lẻ" />
+
+              <input value={newDmxCategory} onChange={e => setNewDmxCategory(e.target.value)} className="w-full border rounded-2xl px-5 py-4" placeholder="Phân loại sản phẩm, ví dụ: Tivi, Tủ lạnh, Máy giặt" />
+
+              <textarea
+                value={newDmxBulkPricing}
+                onChange={e => setNewDmxBulkPricing(e.target.value)}
+                className="w-full border rounded-2xl px-5 py-4"
+                placeholder={'Giá mua nhiều, mỗi dòng 1 mốc. Ví dụ:\n2=9000\n5=8000\n10=7000'}
+              />
 
               <textarea value={newDmxNote} onChange={e => setNewDmxNote(e.target.value)} className="w-full border rounded-2xl px-5 py-4" placeholder="Ghi chú / hướng dẫn sử dụng voucher" />
 
@@ -1163,8 +1284,22 @@ export default function App() {
               </button>
             </div>
 
+            <div className="flex flex-col md:flex-row gap-3 mb-5">
+              <button onClick={loadDmxProducts} className="bg-slate-900 text-white rounded-2xl px-5 py-3 font-bold">Tải lại DMX</button>
+              <input
+                value={dmxSearch}
+                onChange={e => setDmxSearch(e.target.value)}
+                className="flex-1 border rounded-2xl px-5 py-3"
+                placeholder="Tìm sản phẩm DMX theo tên, phân loại, ghi chú..."
+              />
+            </div>
+
+            <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 mb-4 text-sm">
+              Sản phẩm được tự động sắp xếp theo phân loại, rồi theo tên. Các sản phẩm cùng phân loại sẽ nằm gần nhau.
+            </div>
+
             <div className="space-y-4">
-              {dmxProducts.map(p => (
+              {filteredDmxProducts.map(p => (
                 <div key={p.id} className="border rounded-3xl p-5 bg-white">
                   <div className="flex gap-4">
                     {p.image && <img src={p.image} className="w-32 h-32 object-cover rounded-2xl" />}
@@ -1172,14 +1307,36 @@ export default function App() {
                     <div className="flex-1">
                       <h3 className="text-2xl font-black">{p.name}</h3>
 
-                      <p className="text-slate-500">Giá bán: {money(p.price)}</p>
+                      <p className="text-slate-500">Phân loại: {getDmxCategory(p)}</p>
+                      <p className="text-slate-500">Giá bán lẻ: {money(p.price)}</p>
                       <p className="text-slate-500">Kho còn: {p.stock || 0}</p>
                       <p className="text-slate-500">Đã bán: {p.sold || 0}</p>
                       <p className={`font-bold ${p.hidden ? "text-rose-600" : "text-emerald-600"}`}>
                         {p.hidden ? "Đang ẩn" : "Đang hiện"}
                       </p>
 
+                      {p.bulkPricing && p.bulkPricing.length > 0 && (
+                        <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-3 mt-3 text-sm">
+                          <b>Giá mua nhiều:</b>
+                          <pre className="whitespace-pre-wrap mt-2">{bulkPricingToText(p.bulkPricing)}</pre>
+                        </div>
+                      )}
+
                       {p.note && <div className="bg-slate-100 rounded-2xl p-3 mt-3 text-sm whitespace-pre-wrap">{p.note}</div>}
+
+                      <div className="grid md:grid-cols-2 gap-3 mt-4">
+                        <input defaultValue={p.name} onBlur={e => updateDmxProduct(p, { name: e.target.value })} className="border rounded-xl px-3 py-2" placeholder="Tên sản phẩm" />
+                        <input defaultValue={p.price} onBlur={e => updateDmxProduct(p, { price: Number(e.target.value) })} className="border rounded-xl px-3 py-2" placeholder="Giá bán lẻ" />
+                        <input defaultValue={p.category || ""} onBlur={e => updateDmxProduct(p, { category: e.target.value })} className="border rounded-xl px-3 py-2" placeholder="Phân loại" />
+                        <input defaultValue={p.note || ""} onBlur={e => updateDmxProduct(p, { note: e.target.value })} className="border rounded-xl px-3 py-2" placeholder="Ghi chú" />
+                      </div>
+
+                      <textarea
+                        defaultValue={bulkPricingToText(p.bulkPricing)}
+                        onBlur={e => updateDmxProduct(p, { bulkPricing: parseBulkPricingText(e.target.value) })}
+                        className="w-full border rounded-xl px-3 py-2 mt-3"
+                        placeholder={'Giá mua nhiều, ví dụ:\n2=9000\n5=8000'}
+                      />
 
                       <div className="flex gap-2 mt-4 flex-wrap">
                         <button onClick={() => uploadDmxCodes(p)} className="bg-indigo-600 text-white rounded-xl px-4 py-2 font-bold">
