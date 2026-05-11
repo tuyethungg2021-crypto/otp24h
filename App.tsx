@@ -822,7 +822,7 @@ export default function App() {
     [services, search]
   );
 
-  const activeOrders = orders.filter(o => o.status === "waiting" || (o.status === "done" && o.code));
+  const activeOrders
 
   const filteredAdminServices = useMemo(
     () =>
