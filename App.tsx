@@ -342,34 +342,44 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
 
-    // Load dữ liệu nhẹ sau khi đăng nhập để web vào nhanh hơn.
-    // Các dữ liệu nặng của admin sẽ chỉ load khi mở đúng tab bên dưới.
-    loadOrders();
-    loadTopups();
-    loadDmxOrders();
+    // Cho giao diện vào trước, rồi mới tải dữ liệu nền để giảm cảm giác đăng nhập chậm.
+    const timer = window.setTimeout(() => {
+      loadOrders();
+      loadTopups();
 
-    if (isAdmin) {
-      loadProviderSettings();
-    }
+      // Admin chỉ load cấu hình API nhẹ, không load danh sách dịch vụ/user/DMX lúc login.
+      if (user.role === "admin") {
+        loadProviderSettings();
+      }
+    }, 100);
+
+    return () => window.clearTimeout(timer);
   }, [user]);
 
   useEffect(() => {
-    if (!user || !isAdmin) return;
+    if (!user) return;
 
-    if (tab === "users") {
-      loadUsers();
-    }
-
-    if (tab === "adminServices") {
-      loadAdminServices();
-    }
-
-    if (tab === "adminDmx") {
+    // Khách chỉ load DMX khi mở đúng tab DMX.
+    if (tab === "dmx") {
       loadDmxProducts();
       loadDmxOrders();
     }
 
-    if (tab === "adminTopups") {
+    // Các dữ liệu nặng của admin chỉ load khi mở đúng tab tương ứng.
+    if (user.role === "admin" && tab === "users") {
+      loadUsers();
+    }
+
+    if (user.role === "admin" && tab === "adminServices") {
+      loadAdminServices();
+    }
+
+    if (user.role === "admin" && tab === "adminDmx") {
+      loadDmxProducts();
+      loadDmxOrders();
+    }
+
+    if (user.role === "admin" && tab === "adminTopups") {
       loadTopups();
     }
   }, [tab, user]);
