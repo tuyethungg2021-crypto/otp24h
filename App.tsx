@@ -109,8 +109,8 @@ type ProviderSettings = {
 };
 
 const defaultSettings: Settings = {
-  siteName: "Có All Dịch Vụ",
-  logoText: "H",
+  siteName: "OTP 24H",
+  logoText: "OTP",
   logoImage: "",
   background: "bg-slate-950",
   announcement: "",
@@ -289,9 +289,24 @@ export default function App() {
   };
 
   const loadOrders = async () => {
-    if (!user) return;
-    const res = await fetch("/api/orders", { headers });
-    if (res.ok) setOrders(await res.json());
+    const currentToken = token || localStorage.getItem("otp24h_token") || "";
+
+    if (!currentToken) return;
+
+    const res = await fetch("/api/orders", {
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${currentToken}`
+      }
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      setOrders(Array.isArray(data) ? data : []);
+    } else {
+      const err = await res.json().catch(() => ({}));
+      show(err.message || "Không tải được lịch sử thuê sim");
+    }
   };
 
   const loadTopups = async () => {
@@ -335,41 +350,57 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Chỉ tải cài đặt giao diện trước khi đăng nhập.
+    // Không gọi /api/services ở màn login để tránh API thuê sim làm chậm đăng nhập.
     loadSettings();
-    loadServices();
   }, []);
 
   useEffect(() => {
     if (!user) return;
 
-    // Load dữ liệu nhẹ sau khi đăng nhập để web vào nhanh hơn.
-    // Các dữ liệu nặng của admin sẽ chỉ load khi mở đúng tab bên dưới.
-    loadOrders();
-    loadTopups();
-    loadDmxOrders();
+    // Cho giao diện vào trước, rồi mới tải dữ liệu nền để giảm cảm giác đăng nhập chậm.
+    const timer = window.setTimeout(() => {
+      loadOrders();
+      loadTopups();
 
-    if (isAdmin) {
-      loadProviderSettings();
-    }
-  }, [user]);
+      // Admin chỉ load cấu hình API nhẹ, không load danh sách dịch vụ/user/DMX lúc login.
+      if (user.role === "admin") {
+        loadProviderSettings();
+      }
+    }, 100);
+
+    return () => window.clearTimeout(timer);
+  }, [user, token]);
 
   useEffect(() => {
-    if (!user || !isAdmin) return;
+    if (!user) return;
 
-    if (tab === "users") {
-      loadUsers();
+    // Dịch vụ OTP chỉ load khi mở tab Dịch vụ OTP hoặc khi user vừa vào tab mặc định.
+    if (tab === "services") {
+      loadServices();
     }
 
-    if (tab === "adminServices") {
-      loadAdminServices();
-    }
-
-    if (tab === "adminDmx") {
+    // Khách chỉ load DMX khi mở đúng tab DMX.
+    if (tab === "dmx") {
       loadDmxProducts();
       loadDmxOrders();
     }
 
-    if (tab === "adminTopups") {
+    // Các dữ liệu nặng của admin chỉ load khi mở đúng tab tương ứng.
+    if (user.role === "admin" && tab === "users") {
+      loadUsers();
+    }
+
+    if (user.role === "admin" && tab === "adminServices") {
+      loadAdminServices();
+    }
+
+    if (user.role === "admin" && tab === "adminDmx") {
+      loadDmxProducts();
+      loadDmxOrders();
+    }
+
+    if (user.role === "admin" && tab === "adminTopups") {
       loadTopups();
     }
   }, [tab, user]);
@@ -464,7 +495,10 @@ export default function App() {
       const data = await res.json();
       if (!res.ok) return show(data.message || "Không lấy được số");
 
-      setUser(data.user);
+      if (data.user) setUser(data.user);
+      if (data.order) {
+        setOrders(prev => [data.order, ...prev.filter(o => o.id !== data.order.id)]);
+      }
       await loadOrders();
       show("Đã lấy số thành công");
     } finally {
