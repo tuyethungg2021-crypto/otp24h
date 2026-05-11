@@ -887,11 +887,20 @@ app.get("/api/orders", requireAuth, async (req, res) => {
   const data = req.data;
   const user = req.user;
 
-  res.json(
-    user.role === "admin"
-      ? data.orders
-      : data.orders.filter(o => o.userId === user.id)
+  let orders = Array.isArray(data.orders) ? data.orders : [];
+
+  if (user.role !== "admin") {
+    orders = orders.filter(o =>
+      String(o.userId || "") === String(user.id) ||
+      String(o.username || "").toLowerCase() === String(user.username || "").toLowerCase()
+    );
+  }
+
+  orders = [...orders].sort((a, b) =>
+    new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
   );
+
+  res.json(orders);
 });
 
 app.post("/api/orders/:id/check-code", requireAuth, async (req, res) => {
@@ -1101,7 +1110,7 @@ app.get("/api/topups", requireAuth, async (req, res) => {
   res.json(
     user.role === "admin"
       ? data.topups
-      : data.topups.filter(t => t.userId === user.id)
+      : data.topups.filter(t => String(t.userId || "") === String(user.id) || String(t.username || "").toLowerCase() === String(user.username || "").toLowerCase())
   );
 });
 
@@ -1219,11 +1228,20 @@ app.get("/api/dmx/orders", requireAuth, async (req, res) => {
   const data = req.data;
   const user = req.user;
 
-  if (user.role === "admin") {
-    return res.json(data.dmxOrders || []);
+  let orders = Array.isArray(data.dmxOrders) ? data.dmxOrders : [];
+
+  if (user.role !== "admin") {
+    orders = orders.filter(o =>
+      String(o.userId || "") === String(user.id) ||
+      String(o.username || "").toLowerCase() === String(user.username || "").toLowerCase()
+    );
   }
 
-  res.json((data.dmxOrders || []).filter(o => o.userId === user.id));
+  orders = [...orders].sort((a, b) =>
+    new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+  );
+
+  res.json(orders);
 });
 
 app.post("/api/dmx/buy", requireAuth, async (req, res) => {
