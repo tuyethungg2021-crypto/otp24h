@@ -822,7 +822,10 @@ export default function App() {
     [services, search]
   );
 
-  const activeOrders
+  const activeOrders = orders.filter(o =>
+  ["waiting", "pending", "processing"].includes(String(o.status || "").toLowerCase()) ||
+  (String(o.status || "").toLowerCase() === "done" && o.code)
+);
 
   const filteredAdminServices = useMemo(
     () =>
