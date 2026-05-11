@@ -1076,8 +1076,7 @@ app.post("/api/dmx/buy", async (req, res) => {
     unitPrice,
     price,
     image: product.image || "",
-    code: codes.join("
-"),
+    code: codes.join("\n"),
     codes,
     note: product.note || "",
     createdAt: new Date().toISOString()
