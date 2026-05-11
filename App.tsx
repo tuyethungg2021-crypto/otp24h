@@ -185,6 +185,7 @@ export default function App() {
   const [dmxProducts, setDmxProducts] = useState<DmxProduct[]>([]);
   const [dmxOrders, setDmxOrders] = useState<DmxOrder[]>([]);
   const [dmxSearch, setDmxSearch] = useState("");
+  const [dmxCategoryFilter, setDmxCategoryFilter] = useState("all");
   const [newDmxName, setNewDmxName] = useState("");
   const [newDmxPrice, setNewDmxPrice] = useState("");
   const [newDmxCategory, setNewDmxCategory] = useState("");
@@ -808,16 +809,30 @@ export default function App() {
     [adminServices, adminServiceSearch]
   );
 
+  const dmxCategories = useMemo(
+    () =>
+      Array.from(new Set(dmxProducts.map(p => getDmxCategory(p)).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b, "vi")
+      ),
+    [dmxProducts]
+  );
+
   const filteredDmxProducts = useMemo(
     () =>
       [...dmxProducts]
-        .filter(p => `${p.name} ${p.category || ""} ${p.note || ""}`.toLowerCase().includes(dmxSearch.toLowerCase()))
+        .filter(p => {
+          const matchesSearch = `${p.name} ${p.category || ""} ${p.note || ""}`
+            .toLowerCase()
+            .includes(dmxSearch.toLowerCase());
+          const matchesCategory = dmxCategoryFilter === "all" || getDmxCategory(p) === dmxCategoryFilter;
+          return matchesSearch && matchesCategory;
+        })
         .sort((a, b) => {
           const categoryCompare = getDmxCategory(a).localeCompare(getDmxCategory(b), "vi");
           if (categoryCompare !== 0) return categoryCompare;
           return String(a.name || "").localeCompare(String(b.name || ""), "vi");
         }),
-    [dmxProducts, dmxSearch]
+    [dmxProducts, dmxSearch, dmxCategoryFilter]
   );
 
   if (!user) {
@@ -1011,6 +1026,18 @@ export default function App() {
                 className="flex-1 border rounded-2xl px-5 py-3"
                 placeholder="Tìm sản phẩm, phân loại hoặc ghi chú..."
               />
+              <select
+                value={dmxCategoryFilter}
+                onChange={e => setDmxCategoryFilter(e.target.value)}
+                className="border rounded-2xl px-5 py-3"
+              >
+                <option value="all">Tất cả danh mục</option>
+                {dmxCategories.map(category => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
             </div>
 
             {!filteredDmxProducts.length && (
