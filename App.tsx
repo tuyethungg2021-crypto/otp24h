@@ -889,3 +889,472 @@ export default function App() {
       </aside>
 
       <main className="lg:ml-72 p-4 lg:p-8">
+        <div className="lg:hidden flex gap-2 overflow-x-auto mb-4">
+          {[
+            "services",
+            "orders",
+            "dmx",
+            "topup",
+            ...(isAdmin ? ["adminDmx"] : [])
+          ].map(t => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className="bg-slate-900 text-white rounded-xl px-4 py-2 whitespace-nowrap"
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+
+        {settings.announcement && (
+          <div className="bg-amber-50 border border-amber-200 rounded-3xl p-5 mb-5 font-semibold whitespace-pre-line">
+            {settings.announcement}
+          </div>
+        )}
+
+        {tab === "services" && (
+          <Panel title="Dịch vụ OTP">
+            <div className="flex flex-col md:flex-row gap-3 mb-5">
+              <button
+                onClick={loadServices}
+                className="bg-slate-900 text-white rounded-2xl px-5 py-3 font-bold"
+              >
+                Tải lại
+              </button>
+
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="flex-1 border rounded-2xl px-5 py-3"
+                placeholder="Tìm dịch vụ..."
+              />
+
+              <select
+                value={selectedCarrier}
+                onChange={e => setSelectedCarrier(e.target.value)}
+                className="border rounded-2xl px-5 py-3"
+              >
+                {carriers.map(c => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {filteredServices.map(s => (
+                <div
+                  key={s.sourceKey || s.id}
+                  className="bg-white border rounded-3xl p-5 shadow-sm"
+                >
+                  <h3 className="text-xl font-black">{s.name}</h3>
+
+                  <p className="text-sm text-slate-500">
+                    Dịch vụ nhận OTP tự động
+                  </p>
+
+                  {s.note && (
+                    <p className="text-sm bg-slate-100 rounded-xl p-3 mt-3">
+                      {s.note}
+                    </p>
+                  )}
+
+                  <p className="text-2xl font-black text-indigo-600 mt-4">
+                    {money(s.price)}
+                  </p>
+
+                  <button
+                    disabled={busy}
+                    onClick={() => rentNumber(s)}
+                    className="mt-5 w-full bg-indigo-600 text-white rounded-2xl py-3 font-black"
+                  >
+                    Thuê số
+                  </button>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        )}
+
+        {tab === "orders" && (
+          <Panel title="Lịch sử thuê số">
+            <div className="space-y-3">
+              {orders.map(o => (
+                <OrderBox
+                  key={o.id}
+                  order={o}
+                  isAdmin={isAdmin}
+                  users={users}
+                  onCheck={checkCode}
+                  onReuse={reuseOrder}
+                />
+              ))}
+            </div>
+          </Panel>
+        )}
+
+        {tab === "dmx" && (
+          <Panel title="Dịch vụ DMX">
+            <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {dmxProducts.map(p => (
+                <div
+                  key={p.id}
+                  className="bg-white border rounded-3xl p-5 shadow-sm"
+                >
+                  {p.image && (
+                    <img
+                      src={p.image}
+                      className="w-full h-48 object-cover rounded-2xl mb-4"
+                    />
+                  )}
+
+                  <h3 className="text-xl font-black">{p.name}</h3>
+
+                  <p className="text-sm text-slate-500 mt-2">
+                    Còn {p.stock || 0} mã
+                  </p>
+
+                  {p.note && (
+                    <div className="bg-slate-100 rounded-2xl p-3 mt-3 text-sm whitespace-pre-wrap">
+                      {p.note}
+                    </div>
+                  )}
+
+                  <p className="text-2xl font-black text-indigo-600 mt-4">
+                    {money(p.price)}
+                  </p>
+
+                  <button
+                    onClick={() => buyDmx(p)}
+                    className="mt-5 w-full bg-indigo-600 text-white rounded-2xl py-3 font-black"
+                  >
+                    Mua ngay
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-10">
+              <h2 className="text-2xl font-black mb-4">
+                Lịch sử mua voucher
+              </h2>
+
+              <div className="space-y-3">
+                {dmxOrders.map(o => (
+                  <div key={o.id} className="border rounded-2xl p-4 bg-white">
+                    <div className="flex gap-4">
+                      {o.image && (
+                        <img
+                          src={o.image}
+                          className="w-28 h-28 object-cover rounded-2xl"
+                        />
+                      )}
+
+                      <div className="flex-1">
+                        <h3 className="font-black text-xl">
+                          {o.productName}
+                        </h3>
+
+                        <p className="text-sm text-slate-500">
+                          Giá: {money(o.price)} |{" "}
+                          {new Date(o.createdAt).toLocaleString("vi-VN")}
+                        </p>
+
+                        <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+                          <b>{o.code}</b>
+                        </div>
+
+                        {o.note && (
+                          <div className="mt-3 bg-slate-100 rounded-xl p-3 text-sm whitespace-pre-wrap">
+                            {o.note}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Panel>
+        )}
+
+        {tab === "topup" && (
+          <Panel title="Nạp tiền">
+            <div className="grid md:grid-cols-2 gap-6">
+              <div className="bg-slate-50 rounded-3xl p-5">
+                <h2 className="text-2xl font-black mb-3">
+                  Thông tin chuyển khoản
+                </h2>
+
+                <p>
+                  Ngân hàng: <b>{settings.bankName}</b>
+                </p>
+
+                <p>
+                  Số tài khoản: <b>{settings.bankAccountNumber}</b>
+                </p>
+
+                <p>
+                  Chủ tài khoản: <b>{settings.bankBeneficiary}</b>
+                </p>
+
+                <p>
+                  Nội dung: <b>{user.username}</b>
+                </p>
+
+                {settings.bankQrUrl && (
+                  <img
+                    src={settings.bankQrUrl}
+                    className="rounded-2xl mt-4 max-w-xs"
+                  />
+                )}
+
+                {settings.topupNote && (
+                  <p className="mt-4 text-sm text-slate-600">
+                    {settings.topupNote}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <h2 className="text-2xl font-black mb-3">
+                  Tạo yêu cầu nạp
+                </h2>
+
+                <input
+                  value={topupAmount}
+                  onChange={e => setTopupAmount(e.target.value)}
+                  className="w-full border rounded-2xl px-5 py-4 mb-4"
+                  placeholder="Số tiền đã chuyển"
+                />
+
+                <input
+                  value={topupNote}
+                  onChange={e => setTopupNote(e.target.value)}
+                  className="w-full border rounded-2xl px-5 py-4 mb-4"
+                  placeholder="Ghi chú / mã giao dịch"
+                />
+
+                <button
+                  onClick={createTopup}
+                  className="w-full bg-indigo-600 text-white rounded-2xl px-6 py-4 font-black"
+                >
+                  Gửi yêu cầu nạp tiền
+                </button>
+              </div>
+            </div>
+          </Panel>
+        )}
+
+        {tab === "adminDmx" && isAdmin && (
+          <Panel title="Quản lý DMX">
+            <div className="bg-white border rounded-3xl p-5 mb-6 space-y-4">
+              <input
+                value={newDmxName}
+                onChange={e => setNewDmxName(e.target.value)}
+                className="w-full border rounded-2xl px-5 py-4"
+                placeholder="Tên sản phẩm"
+              />
+
+              <input
+                value={newDmxPrice}
+                onChange={e => setNewDmxPrice(e.target.value)}
+                className="w-full border rounded-2xl px-5 py-4"
+                placeholder="Giá bán"
+              />
+
+              <textarea
+                value={newDmxNote}
+                onChange={e => setNewDmxNote(e.target.value)}
+                className="w-full border rounded-2xl px-5 py-4"
+                placeholder="Ghi chú / hướng dẫn sử dụng voucher"
+              />
+
+              <div className="border rounded-2xl p-4">
+                <p className="font-bold mb-2">Ảnh sản phẩm</p>
+
+                {newDmxImage && (
+                  <img
+                    src={newDmxImage}
+                    className="w-40 rounded-2xl mb-3"
+                  />
+                )}
+
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      imageToBase64(file, value => setNewDmxImage(value));
+                    }
+                  }}
+                  className="w-full border rounded-2xl px-5 py-4"
+                />
+              </div>
+
+              <button
+                onClick={createDmxProduct}
+                className="bg-indigo-600 text-white rounded-2xl px-6 py-4 font-black"
+              >
+                Tạo sản phẩm
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {dmxProducts.map(p => (
+                <div key={p.id} className="border rounded-3xl p-5 bg-white">
+                  <div className="flex gap-4">
+                    {p.image && (
+                      <img
+                        src={p.image}
+                        className="w-32 h-32 object-cover rounded-2xl"
+                      />
+                    )}
+
+                    <div className="flex-1">
+                      <h3 className="text-2xl font-black">{p.name}</h3>
+
+                      <p className="text-slate-500">
+                        Giá bán: {money(p.price)}
+                      </p>
+
+                      <p className="text-slate-500">
+                        Kho còn: {p.stock || 0}
+                      </p>
+
+                      <p className="text-slate-500">
+                        Đã bán: {p.sold || 0}
+                      </p>
+
+                      {p.note && (
+                        <div className="bg-slate-100 rounded-2xl p-3 mt-3 text-sm whitespace-pre-wrap">
+                          {p.note}
+                        </div>
+                      )}
+
+                      <div className="flex gap-2 mt-4 flex-wrap">
+                        <button
+                          onClick={() => uploadDmxCodes(p)}
+                          className="bg-indigo-600 text-white rounded-xl px-4 py-2 font-bold"
+                        >
+                          Upload mã
+                        </button>
+
+                        <button
+                          onClick={() => deleteDmxProduct(p)}
+                          className="bg-rose-600 text-white rounded-xl px-4 py-2 font-bold"
+                        >
+                          Xóa sản phẩm
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function Toast({ children }: { children: any }) {
+  return (
+    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-slate-950 text-white rounded-2xl px-5 py-3 shadow font-bold">
+      {children}
+    </div>
+  );
+}
+
+function Nav({ label, id, tab, setTab }: any) {
+  return (
+    <button
+      onClick={() => setTab(id)}
+      className={`w-full rounded-2xl px-4 py-3 text-left font-bold mb-2 ${
+        tab === id ? "bg-indigo-600" : "bg-slate-800"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+function Panel({ title, children }: { title: string; children: any }) {
+  return (
+    <div className="bg-white rounded-3xl p-6 shadow mb-6">
+      <h1 className="text-3xl font-black mb-5">{title}</h1>
+      {children}
+    </div>
+  );
+}
+
+function OrderBox({ order, isAdmin, users = [], onCheck, onReuse }: any) {
+  const orderUser = users.find((u: User) => u.id === order.userId);
+
+  return (
+    <div className="border rounded-2xl p-4 bg-white">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <h3 className="font-black text-xl">
+            {order.appName} - {order.number}
+          </h3>
+
+          <p className="text-sm text-slate-500">
+            {isAdmin && (
+              <>
+                User: {orderUser?.username || order.userId || "Không rõ"} |
+                Nguồn: {order.provider || "api"} |{" "}
+              </>
+            )}
+            Nhà mạng: {order.carrier || "Tất cả"} | Trạng thái:{" "}
+            {order.status} | Giá: {money(order.price)}
+          </p>
+
+          <p className="text-xs text-slate-400">
+            {new Date(order.createdAt).toLocaleString("vi-VN")}
+          </p>
+        </div>
+
+        <div className="flex gap-2 flex-wrap">
+          {order.status === "waiting" && (
+            <button
+              onClick={() => onCheck(order)}
+              className="bg-indigo-600 text-white rounded-xl px-4 py-2 font-bold"
+            >
+              Check OTP
+            </button>
+          )}
+
+          {order.provider === "codesim" && order.status === "done" && (
+            <button
+              onClick={() => onReuse(order)}
+              className="bg-emerald-600 text-white rounded-xl px-4 py-2 font-bold"
+            >
+              Thuê lại
+            </button>
+          )}
+        </div>
+      </div>
+
+      {order.code ? (
+        <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+          <b>OTP: {order.code}</b>
+        </div>
+      ) : (
+        order.status === "waiting" && (
+          <p className="mt-3 text-slate-500">Đang tự động chờ OTP...</p>
+        )
+      )}
+
+      {order.sms && (
+        <pre className="mt-3 bg-slate-100 rounded-xl p-3 whitespace-pre-wrap text-sm">
+          {order.sms}
+        </pre>
+      )}
+    </div>
+  );
+}
