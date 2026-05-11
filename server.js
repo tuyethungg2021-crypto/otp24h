@@ -219,27 +219,58 @@ function normalizeName(name) {
     .trim();
 }
 
-async function getJson(url) {
-  const response = await fetch(url, {
-    method: "GET",
-    headers: {
-      Accept: "application/json, text/plain, */*",
-      "User-Agent": "Mozilla/5.0 OTP24H"
-    }
-  });
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-  const text = await response.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    return {
-      error: true,
-      httpStatus: response.status,
-      contentType: response.headers.get("content-type"),
-      message: "API trả về dữ liệu không hợp lệ",
-      rawPreview: text.slice(0, 500)
-    };
+async function getJson(url, options = {}) {
+  const timeoutMs = Number(options.timeoutMs || 12000);
+  const retries = Number(options.retries || 0);
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        signal: controller.signal,
+        headers: {
+          Accept: "application/json, text/plain, */*",
+          "User-Agent": "Mozilla/5.0 OTP24H"
+        }
+      });
+
+      const bodyText = await response.text();
+      clearTimeout(timeout);
+
+      try {
+        return JSON.parse(bodyText);
+      } catch {
+        return {
+          error: true,
+          httpStatus: response.status,
+          contentType: response.headers.get("content-type"),
+          message: "API trả về dữ liệu không hợp lệ",
+          rawPreview: bodyText.slice(0, 500)
+        };
+      }
+    } catch (error) {
+      clearTimeout(timeout);
+      lastError = {
+        error: true,
+        message: error?.name === "AbortError" ? "API timeout" : error.message || "Lỗi gọi API",
+        attempt: attempt + 1
+      };
+
+      if (attempt < retries) {
+        await sleep(400 * (attempt + 1));
+      }
+    }
   }
+
+  return lastError || { error: true, message: "Lỗi gọi API" };
 }
 
 function maskKey(key = "") {
@@ -285,7 +316,7 @@ async function callCodesim(data, pathName, params = {}) {
     }
   });
 
-  return await getJson(url);
+  return await getJson(url, { timeoutMs: 15000, retries: 1 });
 }
 
 function isChayOk(api) {
@@ -344,9 +375,40 @@ async function getChayServices(data) {
 
 async function getCodesimServices(data) {
   if (!data.providerSettings?.codesimEnabled) return { services: [], error: null };
+
   const api = await callCodesim(data, "/service/get_service_by_api_key");
-  if (!isCodesimOk(api)) return { services: [], error: api };
-  return { services: (api.data || []).map(serviceFromCodesim), error: null };
+
+  if (isCodesimOk(api) && Array.isArray(api.data)) {
+    const services = api.data.map(serviceFromCodesim);
+    data.providerSettings = data.providerSettings || {};
+    data.providerSettings.codesimServiceCache = services;
+    data.providerSettings.codesimServiceCacheAt = new Date().toISOString();
+    data.providerSettings.codesimLastError = null;
+    await writeData(data);
+    return { services, error: null };
+  }
+
+  data.providerSettings = data.providerSettings || {};
+  data.providerSettings.codesimLastError = api;
+  data.providerSettings.codesimLastErrorAt = new Date().toISOString();
+  await writeData(data);
+
+  const cache = Array.isArray(data.providerSettings.codesimServiceCache)
+    ? data.providerSettings.codesimServiceCache
+    : [];
+
+  if (cache.length) {
+    return {
+      services: cache,
+      error: {
+        message: "CodeSim API lỗi tạm thời, đang dùng cache dịch vụ gần nhất",
+        cacheAt: data.providerSettings.codesimServiceCacheAt || null,
+        api
+      }
+    };
+  }
+
+  return { services: [], error: api };
 }
 
 async function getAllServices(data) {
