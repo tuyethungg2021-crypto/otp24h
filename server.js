@@ -508,6 +508,13 @@ app.get("/api/dmx/orders", async (req, res) => {
 });
 
 app.use(express.static(path.join(__dirname, "dist")));
-app.get("*", (req, res) => res.sendFile(path.join(__dirname, "dist", "index.html")));
+// SPA fallback. Do not use app.get("*") because Express 5/path-to-regexp
+// throws "Missing parameter name at index 1" on Render with newer dependencies.
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/")) {
+    return res.status(404).json({ error: "API không tồn tại" });
+  }
+  return res.sendFile(path.join(__dirname, "dist", "index.html"));
+});
 
 app.listen(PORT, () => console.log(`OTP24H server running on port ${PORT}`));
