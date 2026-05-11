@@ -16,7 +16,7 @@ let mongoClient;
 let mongoCollection;
 
 app.use(cors());
-app.use(express.json({ limit: "5mb" }));
+app.use(express.json({ limit: "10mb" }));
 
 const defaultData = {
   users: [
@@ -32,6 +32,7 @@ const defaultData = {
   settings: {
     siteName: "OTP 24H",
     logoText: "OTP",
+    logoImage: "",
     background: "bg-slate-950",
     announcement: "Chào mừng bạn đến với OTP 24H.\nHệ thống thuê sim nhận mã tự động.",
     bannerImage: "",
@@ -42,14 +43,16 @@ const defaultData = {
     topupNote: "Nội dung chuyển khoản: username của bạn. Sau khi chuyển khoản hãy tạo yêu cầu nạp tiền để admin duyệt."
   },
   providerSettings: {
-    chayApiKey: process.env.CHAYCODESO3_API_KEY || "248c26ea0cd1371009db5dd443339ca1",
+    chayApiKey: process.env.CHAYCODESO3_API_KEY || "",
     chayEnabled: true,
     codesimApiKey: process.env.CODESIM_API_KEY || "",
     codesimEnabled: true
   },
   serviceOverrides: {},
   orders: [],
-  topups: []
+  topups: [],
+  dmxProducts: [],
+  dmxOrders: []
 };
 
 async function getCollection() {
@@ -66,6 +69,7 @@ async function getCollection() {
 async function readData() {
   const collection = await getCollection();
   let doc = await collection.findOne({ id: "main" });
+
   if (!doc) {
     doc = { id: "main", ...defaultData };
     await collection.insertOne(doc);
@@ -79,13 +83,16 @@ async function readData() {
     users: doc.users || defaultData.users,
     serviceOverrides: doc.serviceOverrides || {},
     orders: doc.orders || [],
-    topups: doc.topups || []
+    topups: doc.topups || [],
+    dmxProducts: doc.dmxProducts || [],
+    dmxOrders: doc.dmxOrders || []
   };
 }
 
 async function writeData(data) {
   const collection = await getCollection();
   const { _id, ...clean } = data;
+
   await collection.updateOne(
     { id: "main" },
     { $set: { ...clean, id: "main", updatedAt: new Date().toISOString() } },
@@ -101,7 +108,9 @@ function publicUser(user) {
 async function requireAdmin(req, res, next) {
   const data = await readData();
   const user = data.users.find(u => u.id === req.headers["x-user-id"] && u.role === "admin");
+
   if (!user) return res.status(403).json({ message: "Bạn không có quyền admin" });
+
   req.data = data;
   req.admin = user;
   next();
@@ -126,6 +135,7 @@ async function getJson(url) {
   });
 
   const text = await response.text();
+
   try {
     return JSON.parse(text);
   } catch {
@@ -223,6 +233,7 @@ function serviceFromCodesim(raw) {
 
 function applyOverride(source, overrides) {
   const custom = overrides[source.sourceKey] || {};
+
   return {
     ...source,
     name: custom.name || source.originalName,
@@ -234,15 +245,19 @@ function applyOverride(source, overrides) {
 
 async function getChayServices(data) {
   if (!data.providerSettings?.chayEnabled) return { services: [], error: null };
+
   const api = await callChay(data, { act: "app" });
   if (!isChayOk(api)) return { services: [], error: api };
+
   return { services: (api.Result || []).map(serviceFromChay), error: null };
 }
 
 async function getCodesimServices(data) {
   if (!data.providerSettings?.codesimEnabled) return { services: [], error: null };
+
   const api = await callCodesim(data, "/service/get_service_by_api_key");
   if (!isCodesimOk(api)) return { services: [], error: api };
+
   return { services: (api.data || []).map(serviceFromCodesim), error: null };
 }
 
@@ -270,33 +285,6 @@ app.get("/api/db-status", async (req, res) => {
   } catch (error) {
     res.status(500).json({ ok: false, message: error.message });
   }
-});
-
-app.get("/api/source-status", async (req, res) => {
-  const data = await readData();
-  const chay = await getChayServices(data);
-  const codesim = await getCodesimServices(data);
-  const all = [...chay.services, ...codesim.services].map(s => applyOverride(s, data.serviceOverrides));
-
-  res.json({
-    chaycodeso3: {
-      ok: !chay.error,
-      enabled: !!data.providerSettings.chayEnabled,
-      hasApiKey: !!getChayKey(data),
-      serviceCount: chay.services.length,
-      error: chay.error || null
-    },
-    codesim: {
-      ok: !codesim.error,
-      enabled: !!data.providerSettings.codesimEnabled,
-      hasApiKey: !!getCodesimKey(data),
-      serviceCount: codesim.services.length,
-      error: codesim.error || null
-    },
-    total: all.length,
-    visible: all.filter(s => !s.hidden).length,
-    hidden: all.filter(s => s.hidden).length
-  });
 });
 
 app.get("/api/settings", async (req, res) => {
@@ -436,7 +424,9 @@ app.post("/api/change-password", async (req, res) => {
 app.get("/api/me", async (req, res) => {
   const data = await readData();
   const user = data.users.find(u => u.id === req.query.userId);
+
   if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+
   res.json(publicUser(user));
 });
 
@@ -490,14 +480,16 @@ app.get("/api/user-stats", requireAdmin, async (req, res) => {
     const usedOrders = data.orders.filter(
       o => o.userId === user.id && o.status !== "canceled" && !(o.status === "expired" && o.refunded)
     );
+    const dmxOrders = data.dmxOrders.filter(o => o.userId === user.id);
 
     const totalTopup = approvedTopups.reduce((sum, t) => sum + Number(t.amount || 0), 0);
-    const totalUsed = usedOrders.reduce((sum, o) => sum + Number(o.price || 0), 0);
+    const totalOtpUsed = usedOrders.reduce((sum, o) => sum + Number(o.price || 0), 0);
+    const totalDmxUsed = dmxOrders.reduce((sum, o) => sum + Number(o.price || 0), 0);
 
     return {
       ...publicUser(user),
       totalTopup,
-      totalUsed,
+      totalUsed: totalOtpUsed + totalDmxUsed,
       balance: Number(user.balance || 0)
     };
   });
@@ -614,7 +606,7 @@ app.post("/api/orders", async (req, res) => {
       appId: String(service.sourceKey),
       providerServiceId: service.providerId,
       appName: service.name,
-      carrier: carrier || "CodeSim",
+      carrier: carrier || "Tự động",
       number: api.data.phone,
       providerCost: Number(api.data.payment || service.providerCost),
       price: service.price,
@@ -681,11 +673,7 @@ app.get("/api/orders", async (req, res) => {
 
   if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
 
-  res.json(
-    user.role === "admin"
-      ? data.orders
-      : data.orders.filter(o => o.userId === user.id)
-  );
+  res.json(user.role === "admin" ? data.orders : data.orders.filter(o => o.userId === user.id));
 });
 
 app.post("/api/orders/:id/check-code", async (req, res) => {
@@ -746,55 +734,6 @@ app.post("/api/orders/:id/check-code", async (req, res) => {
   });
 });
 
-app.post("/api/orders/:id/cancel", async (req, res) => {
-  const data = await readData();
-  const order = data.orders.find(o => o.id === req.params.id);
-
-  if (!order) return res.status(404).json({ message: "Không tìm thấy order" });
-  if (order.status !== "waiting") {
-    return res.status(400).json({ message: "Order không còn trạng thái chờ" });
-  }
-
-  let api;
-  let ok = false;
-  let updatedUser = null;
-
-  if (order.provider === "codesim") {
-    api = await callCodesim(data, `/sim/cancel_api_key/${order.providerSimId}`);
-    ok = isCodesimOk(api);
-  } else {
-    api = await callChay(data, {
-      act: "expired",
-      id: order.providerQueueId
-    });
-    ok = api.ResponseCode === 0;
-  }
-
-  if (ok) {
-    if (!order.refunded) {
-      const user = data.users.find(u => u.id === order.userId);
-      if (user) {
-        user.balance = Number(user.balance || 0) + Number(order.price || 0);
-        updatedUser = publicUser(user);
-      }
-
-      order.refunded = true;
-      order.refundedAt = new Date().toISOString();
-      order.refundReason = "user_cancel";
-    }
-
-    order.status = "canceled";
-  }
-
-  await writeData(data);
-
-  res.json({
-    order,
-    api,
-    user: updatedUser
-  });
-});
-
 app.post("/api/orders/:id/reuse", async (req, res) => {
   const data = await readData();
   const order = data.orders.find(o => o.id === req.params.id);
@@ -834,7 +773,7 @@ app.post("/api/orders/:id/reuse", async (req, res) => {
     appId: order.appId,
     providerServiceId: order.providerServiceId,
     appName: order.appName,
-    carrier: "CodeSim",
+    carrier: "Tự động",
     number: api.data.phone,
     providerCost: Number(api.data.payment || order.providerCost),
     price: order.price,
@@ -890,11 +829,7 @@ app.get("/api/topups", async (req, res) => {
 
   if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
 
-  res.json(
-    user.role === "admin"
-      ? data.topups
-      : data.topups.filter(t => t.userId === user.id)
-  );
+  res.json(user.role === "admin" ? data.topups : data.topups.filter(t => t.userId === user.id));
 });
 
 app.post("/api/topups/:id/approve", requireAdmin, async (req, res) => {
@@ -934,6 +869,209 @@ app.post("/api/topups/:id/reject", requireAdmin, async (req, res) => {
 
   await writeData(data);
   res.json(topup);
+});
+
+app.get("/api/dmx/products", async (req, res) => {
+  const data = await readData();
+
+  const products = (data.dmxProducts || [])
+    .filter(p => !p.hidden)
+    .map(p => ({
+      id: p.id,
+      name: p.name,
+      price: Number(p.price || 0),
+      image: p.image || "",
+      note: p.note || "",
+      stock: Array.isArray(p.codes) ? p.codes.length : 0,
+      sold: Number(p.sold || 0),
+      createdAt: p.createdAt
+    }))
+    .filter(p => p.stock > 0)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  res.json(products);
+});
+
+app.get("/api/dmx/orders", async (req, res) => {
+  const data = await readData();
+  const user = data.users.find(u => u.id === req.query.userId);
+
+  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+
+  if (user.role === "admin") return res.json(data.dmxOrders || []);
+
+  res.json((data.dmxOrders || []).filter(o => o.userId === user.id));
+});
+
+app.post("/api/dmx/buy", async (req, res) => {
+  const { userId, productId } = req.body;
+  const data = await readData();
+
+  const user = data.users.find(u => u.id === userId);
+  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+
+  const product = (data.dmxProducts || []).find(p => p.id === productId);
+  if (!product) return res.status(404).json({ message: "Sản phẩm không tồn tại" });
+
+  if (product.hidden) return res.status(400).json({ message: "Sản phẩm đang bị ẩn" });
+
+  if (!Array.isArray(product.codes) || product.codes.length <= 0) {
+    return res.status(400).json({ message: "Sản phẩm đã hết hàng" });
+  }
+
+  const price = Number(product.price || 0);
+
+  if (Number(user.balance || 0) < price) {
+    return res.status(400).json({ message: "Số dư không đủ" });
+  }
+
+  const codeItem = product.codes.shift();
+
+  user.balance = Number(user.balance || 0) - price;
+  product.sold = Number(product.sold || 0) + 1;
+  product.updatedAt = new Date().toISOString();
+
+  const order = {
+    id: "dmx-" + Date.now(),
+    userId: user.id,
+    username: user.username,
+    productId: product.id,
+    productName: product.name,
+    price,
+    image: product.image || "",
+    code: codeItem,
+    note: product.note || "",
+    createdAt: new Date().toISOString()
+  };
+
+  data.dmxOrders = data.dmxOrders || [];
+  data.dmxOrders.unshift(order);
+
+  await writeData(data);
+
+  res.json({
+    order,
+    user: publicUser(user)
+  });
+});
+
+app.get("/api/admin/dmx/products", requireAdmin, async (req, res) => {
+  const data = req.data;
+
+  const products = (data.dmxProducts || []).map(p => ({
+    ...p,
+    stock: Array.isArray(p.codes) ? p.codes.length : 0,
+    codesPreview: Array.isArray(p.codes) ? p.codes.slice(0, 5) : []
+  }));
+
+  res.json(products);
+});
+
+app.post("/api/admin/dmx/products", requireAdmin, async (req, res) => {
+  const data = req.data;
+
+  const name = String(req.body.name || "").trim();
+  const price = Number(req.body.price || 0);
+
+  if (!name) return res.status(400).json({ message: "Thiếu tên sản phẩm" });
+
+  if (!price || Number.isNaN(price) || price < 0) {
+    return res.status(400).json({ message: "Giá bán không hợp lệ" });
+  }
+
+  const product = {
+    id: "dmxp-" + Date.now(),
+    name,
+    price,
+    image: req.body.image || "",
+    note: req.body.note || "",
+    hidden: Boolean(req.body.hidden || false),
+    codes: [],
+    sold: 0,
+    createdAt: new Date().toISOString()
+  };
+
+  data.dmxProducts = data.dmxProducts || [];
+  data.dmxProducts.unshift(product);
+
+  await writeData(data);
+  res.json(product);
+});
+
+app.put("/api/admin/dmx/products/:id", requireAdmin, async (req, res) => {
+  const data = req.data;
+  const product = (data.dmxProducts || []).find(p => p.id === req.params.id);
+
+  if (!product) return res.status(404).json({ message: "Không tìm thấy sản phẩm" });
+
+  if (req.body.name !== undefined) product.name = String(req.body.name || "").trim();
+  if (req.body.price !== undefined) product.price = Number(req.body.price || 0);
+  if (req.body.image !== undefined) product.image = req.body.image || "";
+  if (req.body.note !== undefined) product.note = req.body.note || "";
+  if (req.body.hidden !== undefined) product.hidden = Boolean(req.body.hidden);
+
+  product.updatedAt = new Date().toISOString();
+
+  await writeData(data);
+  res.json(product);
+});
+
+app.delete("/api/admin/dmx/products/:id", requireAdmin, async (req, res) => {
+  const data = req.data;
+
+  data.dmxProducts = (data.dmxProducts || []).filter(p => p.id !== req.params.id);
+
+  await writeData(data);
+  res.json({ success: true });
+});
+
+app.post("/api/admin/dmx/products/:id/codes", requireAdmin, async (req, res) => {
+  const data = req.data;
+  const product = (data.dmxProducts || []).find(p => p.id === req.params.id);
+
+  if (!product) return res.status(404).json({ message: "Không tìm thấy sản phẩm" });
+
+  const raw = String(req.body.codes || "");
+  const codes = raw
+    .split(/\r?\n/)
+    .map(x => x.trim())
+    .filter(Boolean);
+
+  if (!codes.length) return res.status(400).json({ message: "Chưa nhập mã voucher" });
+
+  product.codes = product.codes || [];
+  product.codes.push(...codes);
+  product.updatedAt = new Date().toISOString();
+
+  await writeData(data);
+
+  res.json({
+    success: true,
+    added: codes.length,
+    stock: product.codes.length
+  });
+});
+
+app.delete("/api/admin/dmx/products/:id/codes", requireAdmin, async (req, res) => {
+  const data = req.data;
+  const product = (data.dmxProducts || []).find(p => p.id === req.params.id);
+
+  if (!product) return res.status(404).json({ message: "Không tìm thấy sản phẩm" });
+
+  product.codes = [];
+  product.updatedAt = new Date().toISOString();
+
+  await writeData(data);
+
+  res.json({
+    success: true,
+    stock: 0
+  });
+});
+
+app.get("/api/admin/dmx/orders", requireAdmin, async (req, res) => {
+  const data = req.data;
+  res.json(data.dmxOrders || []);
 });
 
 const distPath = path.resolve("dist");
