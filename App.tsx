@@ -219,9 +219,10 @@ export default function App() {
   const [chayApiKey, setChayApiKey] = useState("");
   const [codesimApiKey, setCodesimApiKey] = useState("");
   const [providerTest, setProviderTest] = useState<any>(null);
+  const [token, setToken] = useState(() => localStorage.getItem("otp24h_token") || "");
 
-  const headers = user
-    ? { "Content-Type": "application/json", "x-user-id": user.id }
+  const headers = token
+    ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
     : { "Content-Type": "application/json" };
 
   const isAdmin = user?.role === "admin";
@@ -289,13 +290,13 @@ export default function App() {
 
   const loadOrders = async () => {
     if (!user) return;
-    const res = await fetch(`/api/orders?userId=${user.id}`);
+    const res = await fetch("/api/orders", { headers });
     if (res.ok) setOrders(await res.json());
   };
 
   const loadTopups = async () => {
     if (!user) return;
-    const res = await fetch(`/api/topups?userId=${user.id}`);
+    const res = await fetch("/api/topups", { headers });
     if (res.ok) setTopups(await res.json());
   };
 
@@ -307,9 +308,31 @@ export default function App() {
 
   const loadDmxOrders = async () => {
     if (!user) return;
-    const res = await fetch(`/api/dmx/orders?userId=${user.id}`);
+    const res = await fetch("/api/dmx/orders", { headers });
     if (res.ok) setDmxOrders(await res.json());
   };
+
+  useEffect(() => {
+    const savedToken = localStorage.getItem("otp24h_token");
+    if (!savedToken) return;
+
+    fetch("/api/me", {
+      headers: { Authorization: `Bearer ${savedToken}` }
+    })
+      .then(async res => {
+        if (!res.ok) throw new Error("expired");
+        return res.json();
+      })
+      .then(data => {
+        setToken(savedToken);
+        setUser(data);
+      })
+      .catch(() => {
+        localStorage.removeItem("otp24h_token");
+        setToken("");
+        setUser(null);
+      });
+  }, []);
 
   useEffect(() => {
     loadSettings();
@@ -332,13 +355,13 @@ export default function App() {
     if (!user) return;
 
     const timer = window.setInterval(async () => {
-      const latest = await fetch(`/api/orders?userId=${user.id}`);
+      const latest = await fetch("/api/orders", { headers });
       if (!latest.ok) return;
 
       const list: Order[] = await latest.json();
 
       for (const order of list.filter(o => o.status === "waiting")) {
-        await fetch(`/api/orders/${order.id}/check-code`, { method: "POST" });
+        await fetch(`/api/orders/${order.id}/check-code`, { method: "POST", headers });
       }
 
       await loadOrders();
@@ -361,7 +384,9 @@ export default function App() {
       const data = await res.json();
       if (!res.ok) return show(data.message || "Đăng nhập thất bại");
 
-      setUser(data);
+      localStorage.setItem("otp24h_token", data.token);
+      setToken(data.token);
+      setUser(data.user);
       show("Đăng nhập thành công");
     } finally {
       setBusy(false);
@@ -382,8 +407,10 @@ export default function App() {
       const data = await res.json();
       if (!res.ok) return show(data.message || "Đăng ký thất bại");
 
-      show("Đăng ký thành công, hãy đăng nhập");
-      setIsLogin(true);
+      localStorage.setItem("otp24h_token", data.token);
+      setToken(data.token);
+      setUser(data.user);
+      show("Đăng ký thành công");
     } finally {
       setBusy(false);
     }
@@ -403,7 +430,6 @@ export default function App() {
         method: "POST",
         headers,
         body: JSON.stringify({
-          userId: user.id,
           appId: service.sourceKey || service.id,
           carrier: selectedCarrier
         })
@@ -421,7 +447,7 @@ export default function App() {
   };
 
   const checkCode = async (order: Order) => {
-    const res = await fetch(`/api/orders/${order.id}/check-code`, { method: "POST" });
+    const res = await fetch(`/api/orders/${order.id}/check-code`, { method: "POST", headers });
     const data = await res.json();
 
     if (!res.ok) return show(data.message || "Không check được code");
@@ -438,7 +464,7 @@ export default function App() {
   const reuseOrder = async (order: Order) => {
     if (!confirm(`Thuê lại số ${order.number}?`)) return;
 
-    const res = await fetch(`/api/orders/${order.id}/reuse`, { method: "POST" });
+    const res = await fetch(`/api/orders/${order.id}/reuse`, { method: "POST", headers });
     const data = await res.json();
 
     if (!res.ok) return show(data.message || "Không thuê lại được");
@@ -598,7 +624,7 @@ export default function App() {
     const res = await fetch("/api/change-password", {
       method: "POST",
       headers,
-      body: JSON.stringify({ userId: user.id, oldPassword, newPassword })
+      body: JSON.stringify({ oldPassword, newPassword })
     });
 
     const data = await res.json();
@@ -616,7 +642,7 @@ export default function App() {
     const res = await fetch("/api/topups", {
       method: "POST",
       headers,
-      body: JSON.stringify({ userId: user.id, amount, note: topupNote })
+      body: JSON.stringify({ amount, note: topupNote })
     });
 
     const data = await res.json();
@@ -682,7 +708,6 @@ export default function App() {
       method: "POST",
       headers,
       body: JSON.stringify({
-        userId: user.id,
         productId: product.id,
         quantity
       })
@@ -922,7 +947,7 @@ export default function App() {
           Đổi mật khẩu
         </button>
 
-        <button onClick={() => setUser(null)} className="w-full rounded-2xl px-4 py-3 text-left font-bold bg-rose-600 mt-3">
+        <button onClick={() => { localStorage.removeItem("otp24h_token"); setToken(""); setUser(null); }} className="w-full rounded-2xl px-4 py-3 text-left font-bold bg-rose-600 mt-3">
           Đăng xuất
         </button>
       </aside>
