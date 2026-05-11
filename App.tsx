@@ -1017,18 +1017,26 @@ function OrderBox({ order, isAdmin, users = [], onCancel, onCheck, onReuse }: an
             Nhà mạng: {order.carrier || "Tất cả"} | Trạng thái: {order.status} | Giá: {money(order.price)}
           </p>
 
-          <p className="text-xs text-slate-400">{new Date(order.createdAt).toLocaleString("vi-VN")}</p>
+          <p className="text-xs text-slate-400">
+            {new Date(order.createdAt).toLocaleString("vi-VN")}
+          </p>
         </div>
 
         <div className="flex gap-2 flex-wrap">
           {order.status === "waiting" && (
-            <button onClick={() => onCheck(order)} className="bg-indigo-600 text-white rounded-xl px-4 py-2 font-bold">
+            <button
+              onClick={() => onCheck(order)}
+              className="bg-indigo-600 text-white rounded-xl px-4 py-2 font-bold"
+            >
               Check OTP
             </button>
           )}
 
           {order.provider === "codesim" && order.status === "done" && (
-            <button onClick={() => onReuse(order)} className="bg-emerald-600 text-white rounded-xl px-4 py-2 font-bold">
+            <button
+              onClick={() => onReuse(order)}
+              className="bg-emerald-600 text-white rounded-xl px-4 py-2 font-bold"
+            >
               Thuê lại
             </button>
           )}
@@ -1046,10 +1054,16 @@ function OrderBox({ order, isAdmin, users = [], onCancel, onCheck, onReuse }: an
           <b>OTP: {order.code}</b>
         </div>
       ) : (
-        order.status === "waiting" && <p className="mt-3 text-slate-500">Đang tự động chờ OTP...</p>
+        order.status === "waiting" && (
+          <p className="mt-3 text-slate-500">Đang tự động chờ OTP...</p>
+        )
       )}
 
-      {order.sms && <pre className="mt-3 bg-slate-100 rounded-xl p-3 whitespace-pre-wrap text-sm">{order.sms}</pre>}
+      {order.sms && (
+        <pre className="mt-3 bg-slate-100 rounded-xl p-3 whitespace-pre-wrap text-sm">
+          {order.sms}
+        </pre>
+      )}
     </div>
   );
 }
