@@ -943,23 +943,73 @@ app.post("/api/topups/:id/reject", requireAdmin, async (req, res) => {
   res.json(topup);
 });
 
+
+function normalizeDmxCategory(name = "") {
+  const text = String(name || "").trim();
+  if (!text) return "Chưa phân loại";
+
+  const bySeparator = text.split(/[-|:–—]/).map(x => x.trim()).filter(Boolean)[0];
+  if (bySeparator && bySeparator.length <= 40) return bySeparator;
+
+  return text.split(/\s+/).slice(0, 2).join(" ") || "Chưa phân loại";
+}
+
+function parseDmxBulkPricing(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map(item => ({ minQty: Number(item.minQty || 0), price: Number(item.price || 0) }))
+      .filter(item => item.minQty > 1 && item.price > 0)
+      .sort((a, b) => a.minQty - b.minQty);
+  }
+
+  return String(value || "")
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => {
+      const parts = line.split(/[=|:,\s]+/).filter(Boolean);
+      return { minQty: Number(parts[0] || 0), price: Number(parts[1] || 0) };
+    })
+    .filter(item => item.minQty > 1 && item.price > 0)
+    .sort((a, b) => a.minQty - b.minQty);
+}
+
+function getDmxUnitPrice(product, quantity = 1) {
+  const tiers = parseDmxBulkPricing(product.bulkPricing)
+    .filter(tier => Number(tier.minQty || 0) <= quantity && Number(tier.price || 0) > 0)
+    .sort((a, b) => Number(b.minQty || 0) - Number(a.minQty || 0));
+
+  return Number(tiers[0]?.price || product.price || 0);
+}
+
+function sortDmxProducts(list) {
+  return [...(list || [])].sort((a, b) => {
+    const ca = String(a.category || normalizeDmxCategory(a.name)).localeCompare(String(b.category || normalizeDmxCategory(b.name)), "vi");
+    if (ca !== 0) return ca;
+    return String(a.name || "").localeCompare(String(b.name || ""), "vi");
+  });
+}
+
 app.get("/api/dmx/products", async (req, res) => {
   const data = await readData();
 
-  const products = (data.dmxProducts || [])
-    .filter(p => !p.hidden)
-    .map(p => ({
-      id: p.id,
-      name: p.name,
-      price: Number(p.price || 0),
-      image: p.image || "",
-      note: p.note || "",
-      stock: Array.isArray(p.codes) ? p.codes.length : 0,
-      sold: Number(p.sold || 0),
-      createdAt: p.createdAt
-    }))
-    .filter(p => p.stock > 0)
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const products = sortDmxProducts(
+    (data.dmxProducts || [])
+      .filter(p => !p.hidden)
+      .map(p => ({
+        id: p.id,
+        name: p.name,
+        price: Number(p.price || 0),
+        category: p.category || normalizeDmxCategory(p.name),
+        bulkPricing: parseDmxBulkPricing(p.bulkPricing),
+        image: p.image || "",
+        note: p.note || "",
+        stock: Array.isArray(p.codes) ? p.codes.length : 0,
+        sold: Number(p.sold || 0),
+        createdAt: p.createdAt
+      }))
+      .filter(p => p.stock > 0)
+  );
 
   res.json(products);
 });
@@ -979,6 +1029,7 @@ app.get("/api/dmx/orders", async (req, res) => {
 
 app.post("/api/dmx/buy", async (req, res) => {
   const { userId, productId } = req.body;
+  const quantity = Math.floor(Number(req.body.quantity || 1));
   const data = await readData();
 
   const user = data.users.find(u => u.id === userId);
@@ -989,20 +1040,29 @@ app.post("/api/dmx/buy", async (req, res) => {
 
   if (product.hidden) return res.status(400).json({ message: "Sản phẩm đang bị ẩn" });
 
-  if (!Array.isArray(product.codes) || product.codes.length <= 0) {
-    return res.status(400).json({ message: "Sản phẩm đã hết hàng" });
+  if (!quantity || Number.isNaN(quantity) || quantity <= 0) {
+    return res.status(400).json({ message: "Số lượng không hợp lệ" });
   }
 
-  const price = Number(product.price || 0);
+  if (quantity > 100) {
+    return res.status(400).json({ message: "Mỗi đơn chỉ được mua tối đa 100 mã" });
+  }
+
+  if (!Array.isArray(product.codes) || product.codes.length < quantity) {
+    return res.status(400).json({ message: "Kho không đủ số lượng cần mua" });
+  }
+
+  const unitPrice = getDmxUnitPrice(product, quantity);
+  const price = unitPrice * quantity;
 
   if (Number(user.balance || 0) < price) {
     return res.status(400).json({ message: "Số dư không đủ" });
   }
 
-  const codeItem = product.codes.shift();
+  const codes = product.codes.splice(0, quantity);
 
   user.balance = Number(user.balance || 0) - price;
-  product.sold = Number(product.sold || 0) + 1;
+  product.sold = Number(product.sold || 0) + quantity;
   product.updatedAt = new Date().toISOString();
 
   const order = {
@@ -1011,9 +1071,14 @@ app.post("/api/dmx/buy", async (req, res) => {
     username: user.username,
     productId: product.id,
     productName: product.name,
+    category: product.category || normalizeDmxCategory(product.name),
+    quantity,
+    unitPrice,
     price,
     image: product.image || "",
-    code: codeItem,
+    code: codes.join("
+"),
+    codes,
     note: product.note || "",
     createdAt: new Date().toISOString()
   };
@@ -1032,11 +1097,13 @@ app.post("/api/dmx/buy", async (req, res) => {
 app.get("/api/admin/dmx/products", requireAdmin, async (req, res) => {
   const data = req.data;
 
-  const products = (data.dmxProducts || []).map(p => ({
+  const products = sortDmxProducts((data.dmxProducts || []).map(p => ({
     ...p,
+    category: p.category || normalizeDmxCategory(p.name),
+    bulkPricing: parseDmxBulkPricing(p.bulkPricing),
     stock: Array.isArray(p.codes) ? p.codes.length : 0,
     codesPreview: Array.isArray(p.codes) ? p.codes.slice(0, 5) : []
-  }));
+  })));
 
   res.json(products);
 });
@@ -1057,6 +1124,8 @@ app.post("/api/admin/dmx/products", requireAdmin, async (req, res) => {
     id: "dmxp-" + Date.now(),
     name,
     price,
+    category: String(req.body.category || "").trim() || normalizeDmxCategory(name),
+    bulkPricing: parseDmxBulkPricing(req.body.bulkPricing),
     image: req.body.image || "",
     note: req.body.note || "",
     hidden: Boolean(req.body.hidden || false),
@@ -1080,6 +1149,8 @@ app.put("/api/admin/dmx/products/:id", requireAdmin, async (req, res) => {
 
   if (req.body.name !== undefined) product.name = String(req.body.name || "").trim();
   if (req.body.price !== undefined) product.price = Number(req.body.price || 0);
+  if (req.body.category !== undefined) product.category = String(req.body.category || "").trim() || normalizeDmxCategory(product.name);
+  if (req.body.bulkPricing !== undefined) product.bulkPricing = parseDmxBulkPricing(req.body.bulkPricing);
   if (req.body.image !== undefined) product.image = req.body.image || "";
   if (req.body.note !== undefined) product.note = req.body.note || "";
   if (req.body.hidden !== undefined) product.hidden = Boolean(req.body.hidden);
