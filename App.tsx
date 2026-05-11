@@ -335,60 +335,21 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // Chỉ tải cài đặt giao diện trước khi đăng nhập.
-    // Không gọi /api/services ở màn login để tránh API thuê sim làm chậm đăng nhập.
     loadSettings();
+    loadServices();
   }, []);
 
   useEffect(() => {
-    if (!user) return;
-
-    // Cho giao diện vào trước, rồi mới tải dữ liệu nền để giảm cảm giác đăng nhập chậm.
-    const timer = window.setTimeout(() => {
+    if (user) {
       loadOrders();
       loadTopups();
-
-      // Admin chỉ load cấu hình API nhẹ, không load danh sách dịch vụ/user/DMX lúc login.
-      if (user.role === "admin") {
-        loadProviderSettings();
-      }
-    }, 100);
-
-    return () => window.clearTimeout(timer);
-  }, [user]);
-
-  useEffect(() => {
-    if (!user) return;
-
-    // Dịch vụ OTP chỉ load khi mở tab Dịch vụ OTP hoặc khi user vừa vào tab mặc định.
-    if (tab === "services") {
-      loadServices();
-    }
-
-    // Khách chỉ load DMX khi mở đúng tab DMX.
-    if (tab === "dmx") {
-      loadDmxProducts();
-      loadDmxOrders();
-    }
-
-    // Các dữ liệu nặng của admin chỉ load khi mở đúng tab tương ứng.
-    if (user.role === "admin" && tab === "users") {
       loadUsers();
-    }
-
-    if (user.role === "admin" && tab === "adminServices") {
       loadAdminServices();
-    }
-
-    if (user.role === "admin" && tab === "adminDmx") {
+      loadProviderSettings();
       loadDmxProducts();
       loadDmxOrders();
     }
-
-    if (user.role === "admin" && tab === "adminTopups") {
-      loadTopups();
-    }
-  }, [tab, user]);
+  }, [user, tab]);
 
   useEffect(() => {
     if (!user) return;
@@ -399,10 +360,7 @@ export default function App() {
 
       const list: Order[] = await latest.json();
 
-      for (const order of list.filter(o => {
-        const status = String(o.status || "").toLowerCase();
-        return ["waiting", "pending", "processing"].includes(status);
-      })) {
+      for (const order of list.filter(o => o.status === "waiting")) {
         await fetch(`/api/orders/${order.id}/check-code`, { method: "POST", headers });
       }
 
@@ -410,7 +368,7 @@ export default function App() {
     }, 5000);
 
     return () => window.clearInterval(timer);
-  }, [user, token]);
+  }, [user]);
 
   const login = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -864,10 +822,7 @@ export default function App() {
     [services, search]
   );
 
-  const activeOrders = orders.filter(o => {
-    const status = String(o.status || "").toLowerCase();
-    return ["waiting", "pending", "processing"].includes(status) || (status === "done" && !!o.code);
-  });
+  const activeOrders = orders.filter(o => o.status === "waiting" || (o.status === "done" && o.code));
 
   const filteredAdminServices = useMemo(
     () =>
@@ -1463,51 +1418,6 @@ export default function App() {
                   </div>
                 </div>
               ))}
-            </div>
-
-            <div className="mt-10 border-t pt-6">
-              <h2 className="text-2xl font-black mb-4">Lịch sử đơn DMX</h2>
-
-              <button onClick={loadDmxOrders} className="bg-slate-900 text-white rounded-2xl px-5 py-3 font-bold mb-4">
-                Tải lại lịch sử DMX
-              </button>
-
-              {dmxOrders.length === 0 ? (
-                <div className="bg-slate-50 border rounded-2xl p-5 text-slate-500">Chưa có đơn DMX nào.</div>
-              ) : (
-                <div className="space-y-4">
-                  {dmxOrders.map(o => (
-                    <div key={o.id} className="bg-white border rounded-3xl p-5 shadow-sm">
-                      <div className="flex gap-4">
-                        {o.image && <img src={o.image} className="w-24 h-24 object-cover rounded-2xl" />}
-
-                        <div className="flex-1">
-                          <h3 className="text-xl font-black">{o.productName}</h3>
-                          <p className="text-sm text-slate-500">
-                            User: <b>{o.username || o.userId || "Không rõ"}</b> | Phân loại: {o.category || "Chưa phân loại"}
-                          </p>
-                          <p className="text-sm text-slate-500">
-                            Số lượng: {o.quantity || 1} | Tổng tiền: {money(o.price)} | {new Date(o.createdAt).toLocaleString("vi-VN")}
-                          </p>
-
-                          <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
-                            <p className="font-bold mb-2">Mã đã giao cho khách</p>
-                            <pre className="whitespace-pre-wrap break-all text-sm">
-                              {(o.codes && o.codes.length ? o.codes : [o.code]).filter(Boolean).join("\n")}
-                            </pre>
-                          </div>
-
-                          {o.note && (
-                            <div className="mt-3 bg-slate-100 rounded-2xl p-4 text-sm whitespace-pre-wrap">
-                              {o.note}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           </Panel>
         )}
