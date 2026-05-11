@@ -340,16 +340,39 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (user) {
-      loadOrders();
-      loadTopups();
-      loadUsers();
-      loadAdminServices();
+    if (!user) return;
+
+    // Load dữ liệu nhẹ sau khi đăng nhập để web vào nhanh hơn.
+    // Các dữ liệu nặng của admin sẽ chỉ load khi mở đúng tab bên dưới.
+    loadOrders();
+    loadTopups();
+    loadDmxOrders();
+
+    if (isAdmin) {
       loadProviderSettings();
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || !isAdmin) return;
+
+    if (tab === "users") {
+      loadUsers();
+    }
+
+    if (tab === "adminServices") {
+      loadAdminServices();
+    }
+
+    if (tab === "adminDmx") {
       loadDmxProducts();
       loadDmxOrders();
     }
-  }, [user, tab]);
+
+    if (tab === "adminTopups") {
+      loadTopups();
+    }
+  }, [tab, user]);
 
   useEffect(() => {
     if (!user) return;
@@ -1429,45 +1452,37 @@ export default function App() {
             <div className="mt-10 border-t pt-6">
               <h2 className="text-2xl font-black mb-4">Lịch sử đơn DMX</h2>
 
+              <button onClick={loadDmxOrders} className="bg-slate-900 text-white rounded-2xl px-5 py-3 font-bold mb-4">
+                Tải lại lịch sử DMX
+              </button>
+
               {dmxOrders.length === 0 ? (
-                <div className="bg-white border rounded-2xl p-6 text-slate-500">
-                  Chưa có đơn hàng DMX nào.
-                </div>
+                <div className="bg-slate-50 border rounded-2xl p-5 text-slate-500">Chưa có đơn DMX nào.</div>
               ) : (
                 <div className="space-y-4">
                   {dmxOrders.map(o => (
-                    <div key={o.id} className="border rounded-3xl p-5 bg-white">
+                    <div key={o.id} className="bg-white border rounded-3xl p-5 shadow-sm">
                       <div className="flex gap-4">
-                        {o.image && <img src={o.image} className="w-28 h-28 object-cover rounded-2xl" />}
+                        {o.image && <img src={o.image} className="w-24 h-24 object-cover rounded-2xl" />}
 
                         <div className="flex-1">
-                          <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
-                            <div>
-                              <h3 className="text-xl font-black">{o.productName}</h3>
-                              <p className="text-sm text-slate-500">
-                                User: <b>{o.username || o.userId || "Không rõ"}</b>
-                              </p>
-                              <p className="text-sm text-slate-500">
-                                Phân loại: {o.category || "Chưa phân loại"} | Số lượng: {o.quantity || 1}
-                              </p>
-                              <p className="text-sm text-slate-500">
-                                Đơn giá: {money(o.unitPrice || Number(o.price || 0) / Number(o.quantity || 1))} | Tổng tiền: {money(o.price)}
-                              </p>
-                              <p className="text-xs text-slate-400">
-                                {new Date(o.createdAt).toLocaleString("vi-VN")}
-                              </p>
-                            </div>
-                          </div>
+                          <h3 className="text-xl font-black">{o.productName}</h3>
+                          <p className="text-sm text-slate-500">
+                            User: <b>{o.username || o.userId || "Không rõ"}</b> | Phân loại: {o.category || "Chưa phân loại"}
+                          </p>
+                          <p className="text-sm text-slate-500">
+                            Số lượng: {o.quantity || 1} | Tổng tiền: {money(o.price)} | {new Date(o.createdAt).toLocaleString("vi-VN")}
+                          </p>
 
-                          <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
-                            <b>Mã voucher đã giao:</b>
-                            <pre className="whitespace-pre-wrap break-all mt-2 font-bold text-sm">
+                          <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
+                            <p className="font-bold mb-2">Mã đã giao cho khách</p>
+                            <pre className="whitespace-pre-wrap break-all text-sm">
                               {(o.codes && o.codes.length ? o.codes : [o.code]).filter(Boolean).join("\n")}
                             </pre>
                           </div>
 
                           {o.note && (
-                            <div className="mt-3 bg-slate-100 rounded-xl p-3 text-sm whitespace-pre-wrap">
+                            <div className="mt-3 bg-slate-100 rounded-2xl p-4 text-sm whitespace-pre-wrap">
                               {o.note}
                             </div>
                           )}
@@ -1478,7 +1493,6 @@ export default function App() {
                 </div>
               )}
             </div>
-
           </Panel>
         )}
 
