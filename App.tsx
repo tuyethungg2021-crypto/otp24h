@@ -281,7 +281,7 @@ export default function App() {
           {!services.length && <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">Hiện chưa có dịch vụ nào được mở. Admin vào Quản lý dịch vụ để bấm Bỏ ẩn dịch vụ muốn bán.</div>}
           <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">{filteredServices.map(s => <div key={s.sourceKey || s.id} className="bg-white border rounded-3xl p-5 shadow-sm">
             <h3 className="text-xl font-black">{s.name}</h3>
-            <p className="text-sm text-slate-500">Nguồn: {s.provider} | ID: {s.providerId}</p>
+            <p className="text-sm text-slate-500">Dịch vụ nhận OTP tự động</p>
             {s.note && <p className="text-sm bg-slate-100 rounded-xl p-3 mt-3">{s.note}</p>}
             <p className="text-2xl font-black text-indigo-600 mt-4">{money(s.price)}</p>
             <button disabled={busy} onClick={() => rentNumber(s)} className="mt-5 w-full bg-indigo-600 text-white rounded-2xl py-3 font-black">Thuê số</button>
