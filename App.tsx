@@ -1,15 +1,80 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-type User = { id: string; username: string; role: "admin" | "user"; balance: number; totalTopup?: number; totalUsed?: number };
-type Service = { id: string; sourceKey?: string; provider?: string; providerId?: number; originalName: string; name: string; providerCost: number; price: number; hidden: boolean; note?: string };
-type Order = { id: string; userId?: string; appName: string; number: string; price: number; status: string; code?: string; sms?: string; createdAt: string; provider?: string; carrier?: string; refunded?: boolean; refundReason?: string };
-type Settings = { siteName: string; logoText: string; background: string; announcement: string; bannerImage: string; bankName: string; bankAccountNumber: string; bankBeneficiary: string; bankQrUrl: string; topupNote: string };
-type Topup = { id: string; userId: string; username: string; amount: number; note?: string; status: string; createdAt: string };
-type ProviderSettings = { chayEnabled: boolean; chayApiKeyMasked: string; hasChayApiKey: boolean; codesimEnabled: boolean; codesimApiKeyMasked: string; hasCodesimApiKey: boolean };
+type User = {
+  id: string;
+  username: string;
+  role: "admin" | "user";
+  balance: number;
+  totalTopup?: number;
+  totalUsed?: number;
+};
+
+type Service = {
+  id: string;
+  sourceKey?: string;
+  provider?: string;
+  providerId?: number;
+  originalName: string;
+  name: string;
+  providerCost: number;
+  price: number;
+  hidden: boolean;
+  note?: string;
+};
+
+type Order = {
+  id: string;
+  userId?: string;
+  appName: string;
+  number: string;
+  price: number;
+  status: string;
+  code?: string;
+  sms?: string;
+  createdAt: string;
+  provider?: string;
+  carrier?: string;
+  refunded?: boolean;
+  refundReason?: string;
+};
+
+type Settings = {
+  siteName: string;
+  logoText: string;
+  logoImage: string;
+  background: string;
+  announcement: string;
+  bannerImage: string;
+  bankName: string;
+  bankAccountNumber: string;
+  bankBeneficiary: string;
+  bankQrUrl: string;
+  topupNote: string;
+};
+
+type Topup = {
+  id: string;
+  userId: string;
+  username: string;
+  amount: number;
+  note?: string;
+  status: string;
+  createdAt: string;
+};
+
+type ProviderSettings = {
+  chayEnabled: boolean;
+  chayApiKeyMasked: string;
+  hasChayApiKey: boolean;
+  codesimEnabled: boolean;
+  codesimApiKeyMasked: string;
+  hasCodesimApiKey: boolean;
+};
 
 const defaultSettings: Settings = {
   siteName: "OTP 24H",
   logoText: "OTP",
+  logoImage: "",
   background: "bg-slate-950",
   announcement: "",
   bannerImage: "",
@@ -39,6 +104,7 @@ export default function App() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [topups, setTopups] = useState<Topup[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
+
   const [tab, setTab] = useState("services");
   const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState("");
@@ -48,9 +114,11 @@ export default function App() {
   const [adminServiceSearch, setAdminServiceSearch] = useState("");
   const [selectedCarrier, setSelectedCarrier] = useState("");
   const [busy, setBusy] = useState(false);
+
   const [topupAmount, setTopupAmount] = useState("");
   const [topupNote, setTopupNote] = useState("");
   const [providerCounts, setProviderCounts] = useState<any>({});
+
   const [providerSettings, setProviderSettings] = useState<ProviderSettings>({
     chayEnabled: true,
     chayApiKeyMasked: "",
@@ -59,6 +127,7 @@ export default function App() {
     codesimApiKeyMasked: "",
     hasCodesimApiKey: false
   });
+
   const [chayApiKey, setChayApiKey] = useState("");
   const [codesimApiKey, setCodesimApiKey] = useState("");
   const [providerTest, setProviderTest] = useState<any>(null);
@@ -74,9 +143,28 @@ export default function App() {
     window.setTimeout(() => setNotice(""), 3500);
   };
 
+  const imageToBase64 = (file: File, callback: (value: string) => void) => {
+    if (!file.type.startsWith("image/")) {
+      show("Chỉ được tải file ảnh");
+      return;
+    }
+
+    if (file.size > 1024 * 1024 * 2) {
+      show("Ảnh tối đa 2MB");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => callback(String(reader.result));
+    reader.readAsDataURL(file);
+  };
+
   const loadSettings = async () => {
     const res = await fetch("/api/settings");
-    if (res.ok) setSettings(await res.json());
+    if (res.ok) {
+      const data = await res.json();
+      setSettings({ ...defaultSettings, ...data });
+    }
   };
 
   const loadServices = async () => {
@@ -93,7 +181,9 @@ export default function App() {
 
   const loadAdminServices = async () => {
     if (!user || !isAdmin) return;
+
     const res = await fetch("/api/admin/services", { headers });
+
     if (res.ok) {
       const data = await res.json();
       setAdminServices(data.sources || []);
@@ -239,18 +329,6 @@ export default function App() {
     if (data.order?.status === "expired" && data.order?.refunded) show("Số đã hết hạn, hệ thống đã hoàn tiền");
     else if (data.order?.code) show("Đã có OTP");
     else show(data.api?.Msg || data.api?.message || "Đang chờ OTP");
-  };
-
-  const cancelOrder = async (order: Order) => {
-    const res = await fetch(`/api/orders/${order.id}/cancel`, { method: "POST" });
-    const data = await res.json();
-
-    if (!res.ok) return show(data.message || "Không hủy được");
-
-    if (data.user) setUser(data.user);
-
-    await loadOrders();
-    show(data.order?.refunded ? "Đã hủy và hoàn tiền" : "Đã hủy");
   };
 
   const reuseOrder = async (order: Order) => {
@@ -499,8 +577,12 @@ export default function App() {
         {notice && <Toast>{notice}</Toast>}
 
         <form onSubmit={isLogin ? login : register} className="bg-white rounded-3xl p-8 shadow max-w-md w-full">
-          <div className="w-16 h-16 bg-indigo-600 text-white rounded-2xl grid place-items-center font-black text-2xl mb-4">
-            {settings.logoText}
+          <div className="w-16 h-16 bg-indigo-600 text-white rounded-2xl grid place-items-center font-black text-2xl mb-4 overflow-hidden">
+            {settings.logoImage ? (
+              <img src={settings.logoImage} className="w-full h-full object-cover" />
+            ) : (
+              settings.logoText
+            )}
           </div>
 
           <h1 className="text-3xl font-black mb-2">{settings.siteName}</h1>
@@ -525,11 +607,7 @@ export default function App() {
             {busy ? "Đang xử lý..." : isLogin ? "ĐĂNG NHẬP" : "ĐĂNG KÝ"}
           </button>
 
-          <button
-            type="button"
-            onClick={() => setIsLogin(!isLogin)}
-            className="mt-5 w-full text-indigo-600 font-bold"
-          >
+          <button type="button" onClick={() => setIsLogin(!isLogin)} className="mt-5 w-full text-indigo-600 font-bold">
             {isLogin ? "Chưa có tài khoản? Đăng ký" : "Đã có tài khoản? Đăng nhập"}
           </button>
 
@@ -545,8 +623,12 @@ export default function App() {
 
       <aside className="fixed left-0 top-0 h-full w-72 bg-slate-950 text-white p-5 hidden lg:block overflow-y-auto">
         <div className="flex items-center gap-3 mb-8">
-          <div className="w-12 h-12 bg-indigo-600 rounded-2xl grid place-items-center font-black">
-            {settings.logoText}
+          <div className="w-12 h-12 bg-indigo-600 rounded-2xl grid place-items-center font-black overflow-hidden">
+            {settings.logoImage ? (
+              <img src={settings.logoImage} className="w-full h-full object-cover" />
+            ) : (
+              settings.logoText
+            )}
           </div>
           <h2 className="font-black text-xl">{settings.siteName}</h2>
         </div>
@@ -596,14 +678,7 @@ export default function App() {
 
             <div className="space-y-3">
               {activeOrders.map(o => (
-                <OrderBox
-                  key={o.id}
-                  order={o}
-                  isAdmin={false}
-                  onCancel={cancelOrder}
-                  onCheck={checkCode}
-                  onReuse={reuseOrder}
-                />
+                <OrderBox key={o.id} order={o} isAdmin={false} users={users} onCheck={checkCode} onReuse={reuseOrder} />
               ))}
             </div>
           </Panel>
@@ -631,11 +706,7 @@ export default function App() {
                 placeholder="Tìm dịch vụ..."
               />
 
-              <select
-                value={selectedCarrier}
-                onChange={e => setSelectedCarrier(e.target.value)}
-                className="border rounded-2xl px-5 py-3"
-              >
+              <select value={selectedCarrier} onChange={e => setSelectedCarrier(e.target.value)} className="border rounded-2xl px-5 py-3">
                 {carriers.map(c => (
                   <option key={c.value} value={c.value}>
                     {c.label}
@@ -654,18 +725,13 @@ export default function App() {
               {filteredServices.map(s => (
                 <div key={s.sourceKey || s.id} className="bg-white border rounded-3xl p-5 shadow-sm">
                   <h3 className="text-xl font-black">{s.name}</h3>
-
                   <p className="text-sm text-slate-500">Dịch vụ nhận OTP tự động</p>
 
                   {s.note && <p className="text-sm bg-slate-100 rounded-xl p-3 mt-3">{s.note}</p>}
 
                   <p className="text-2xl font-black text-indigo-600 mt-4">{money(s.price)}</p>
 
-                  <button
-                    disabled={busy}
-                    onClick={() => rentNumber(s)}
-                    className="mt-5 w-full bg-indigo-600 text-white rounded-2xl py-3 font-black"
-                  >
+                  <button disabled={busy} onClick={() => rentNumber(s)} className="mt-5 w-full bg-indigo-600 text-white rounded-2xl py-3 font-black">
                     Thuê số
                   </button>
                 </div>
@@ -678,15 +744,7 @@ export default function App() {
           <Panel title="Lịch sử thuê số">
             <div className="space-y-3">
               {orders.map(o => (
-                <OrderBox
-                  key={o.id}
-                  order={o}
-                  isAdmin={isAdmin}
-                  users={users}
-                  onCancel={cancelOrder}
-                  onCheck={checkCode}
-                  onReuse={reuseOrder}
-                />
+                <OrderBox key={o.id} order={o} isAdmin={isAdmin} users={users} onCheck={checkCode} onReuse={reuseOrder} />
               ))}
             </div>
           </Panel>
@@ -701,14 +759,28 @@ export default function App() {
                 <p>Số tài khoản: <b>{settings.bankAccountNumber}</b></p>
                 <p>Chủ tài khoản: <b>{settings.bankBeneficiary}</b></p>
                 <p>Nội dung: <b>{user.username}</b></p>
+
                 {settings.bankQrUrl && <img src={settings.bankQrUrl} className="rounded-2xl mt-4 max-w-xs" />}
                 {settings.topupNote && <p className="mt-4 text-sm text-slate-600">{settings.topupNote}</p>}
               </div>
 
               <div>
                 <h2 className="text-2xl font-black mb-3">Tạo yêu cầu nạp</h2>
-                <input value={topupAmount} onChange={e => setTopupAmount(e.target.value)} className="w-full border rounded-2xl px-5 py-4 mb-4" placeholder="Số tiền đã chuyển" />
-                <input value={topupNote} onChange={e => setTopupNote(e.target.value)} className="w-full border rounded-2xl px-5 py-4 mb-4" placeholder="Ghi chú / mã giao dịch" />
+
+                <input
+                  value={topupAmount}
+                  onChange={e => setTopupAmount(e.target.value)}
+                  className="w-full border rounded-2xl px-5 py-4 mb-4"
+                  placeholder="Số tiền đã chuyển"
+                />
+
+                <input
+                  value={topupNote}
+                  onChange={e => setTopupNote(e.target.value)}
+                  className="w-full border rounded-2xl px-5 py-4 mb-4"
+                  placeholder="Ghi chú / mã giao dịch"
+                />
+
                 <button onClick={createTopup} className="w-full bg-indigo-600 text-white rounded-2xl px-6 py-4 font-black">
                   Gửi yêu cầu nạp tiền
                 </button>
@@ -801,7 +873,12 @@ export default function App() {
               <button onClick={() => bulkSetHidden(true, true)} disabled={busy} className="bg-amber-500 text-white rounded-2xl px-5 py-3 font-bold">Ẩn dịch vụ đang tìm</button>
             </div>
 
-            <input value={adminServiceSearch} onChange={e => setAdminServiceSearch(e.target.value)} className="w-full border rounded-2xl px-5 py-4 mb-4" placeholder="Tìm dịch vụ, ID hoặc nguồn..." />
+            <input
+              value={adminServiceSearch}
+              onChange={e => setAdminServiceSearch(e.target.value)}
+              className="w-full border rounded-2xl px-5 py-4 mb-4"
+              placeholder="Tìm dịch vụ, ID hoặc nguồn..."
+            />
 
             <div className="grid md:grid-cols-5 gap-3 mb-4">
               <Stat title="Tổng" value={providerCounts.total || adminServices.length} />
@@ -857,11 +934,7 @@ export default function App() {
                   </div>
 
                   <label className="flex items-center gap-3 font-bold">
-                    <input
-                      type="checkbox"
-                      checked={providerSettings.chayEnabled}
-                      onChange={e => setProviderSettings({ ...providerSettings, chayEnabled: e.target.checked })}
-                    />
+                    <input type="checkbox" checked={providerSettings.chayEnabled} onChange={e => setProviderSettings({ ...providerSettings, chayEnabled: e.target.checked })} />
                     Bật nguồn này
                   </label>
                 </div>
@@ -888,11 +961,7 @@ export default function App() {
                   </div>
 
                   <label className="flex items-center gap-3 font-bold">
-                    <input
-                      type="checkbox"
-                      checked={providerSettings.codesimEnabled}
-                      onChange={e => setProviderSettings({ ...providerSettings, codesimEnabled: e.target.checked })}
-                    />
+                    <input type="checkbox" checked={providerSettings.codesimEnabled} onChange={e => setProviderSettings({ ...providerSettings, codesimEnabled: e.target.checked })} />
                     Bật nguồn này
                   </label>
                 </div>
@@ -934,7 +1003,30 @@ export default function App() {
           <Panel title="Cài đặt giao diện">
             <div className="space-y-4 max-w-3xl">
               <input value={settings.siteName} onChange={e => setSettings({ ...settings, siteName: e.target.value })} className="w-full border rounded-2xl px-5 py-4" placeholder="Tên web" />
-              <input value={settings.logoText} onChange={e => setSettings({ ...settings, logoText: e.target.value })} className="w-full border rounded-2xl px-5 py-4" placeholder="Logo text" />
+
+              <input value={settings.logoText} onChange={e => setSettings({ ...settings, logoText: e.target.value })} className="w-full border rounded-2xl px-5 py-4" placeholder="Logo text nếu chưa upload ảnh" />
+
+              <div className="border rounded-2xl p-4">
+                <p className="font-bold mb-2">Ảnh logo web</p>
+
+                {settings.logoImage && <img src={settings.logoImage} className="w-24 h-24 rounded-2xl object-cover mb-3 border" />}
+
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    if (file) imageToBase64(file, value => setSettings({ ...settings, logoImage: value }));
+                  }}
+                  className="w-full border rounded-2xl px-5 py-4"
+                />
+
+                {settings.logoImage && (
+                  <button type="button" onClick={() => setSettings({ ...settings, logoImage: "" })} className="mt-3 bg-rose-600 text-white rounded-xl px-4 py-2 font-bold">
+                    Xóa ảnh logo
+                  </button>
+                )}
+              </div>
 
               <select value={settings.background} onChange={e => setSettings({ ...settings, background: e.target.value })} className="w-full border rounded-2xl px-5 py-4">
                 <option value="bg-slate-950">Nền đen</option>
@@ -944,14 +1036,42 @@ export default function App() {
               </select>
 
               <textarea value={settings.announcement} onChange={e => setSettings({ ...settings, announcement: e.target.value })} className="w-full border rounded-2xl px-5 py-4" placeholder="Thông báo admin" />
+
               <input value={settings.bannerImage} onChange={e => setSettings({ ...settings, bannerImage: e.target.value })} className="w-full border rounded-2xl px-5 py-4" placeholder="Link ảnh banner" />
 
               <div className="pt-4 border-t">
                 <h2 className="text-2xl font-black mb-4">Thông tin nạp tiền</h2>
+
                 <input value={settings.bankName || ""} onChange={e => setSettings({ ...settings, bankName: e.target.value })} className="w-full border rounded-2xl px-5 py-4 mb-3" placeholder="Tên ngân hàng" />
+
                 <input value={settings.bankAccountNumber || ""} onChange={e => setSettings({ ...settings, bankAccountNumber: e.target.value })} className="w-full border rounded-2xl px-5 py-4 mb-3" placeholder="Số tài khoản" />
+
                 <input value={settings.bankBeneficiary || ""} onChange={e => setSettings({ ...settings, bankBeneficiary: e.target.value })} className="w-full border rounded-2xl px-5 py-4 mb-3" placeholder="Chủ tài khoản" />
-                <input value={settings.bankQrUrl || ""} onChange={e => setSettings({ ...settings, bankQrUrl: e.target.value })} className="w-full border rounded-2xl px-5 py-4 mb-3" placeholder="Link ảnh QR" />
+
+                <input value={settings.bankQrUrl || ""} onChange={e => setSettings({ ...settings, bankQrUrl: e.target.value })} className="w-full border rounded-2xl px-5 py-4 mb-3" placeholder="Link ảnh QR hoặc ảnh đã tải lên" />
+
+                <div className="border rounded-2xl p-4 mb-3">
+                  <p className="font-bold mb-2">Tải ảnh QR nạp tiền</p>
+
+                  {settings.bankQrUrl && <img src={settings.bankQrUrl} className="w-48 rounded-2xl object-cover mb-3 border" />}
+
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (file) imageToBase64(file, value => setSettings({ ...settings, bankQrUrl: value }));
+                    }}
+                    className="w-full border rounded-2xl px-5 py-4"
+                  />
+
+                  {settings.bankQrUrl && (
+                    <button type="button" onClick={() => setSettings({ ...settings, bankQrUrl: "" })} className="mt-3 bg-rose-600 text-white rounded-xl px-4 py-2 font-bold">
+                      Xóa ảnh QR
+                    </button>
+                  )}
+                </div>
+
                 <textarea value={settings.topupNote || ""} onChange={e => setSettings({ ...settings, topupNote: e.target.value })} className="w-full border rounded-2xl px-5 py-4" placeholder="Ghi chú nạp tiền" />
               </div>
 
@@ -976,10 +1096,7 @@ function Toast({ children }: { children: any }) {
 
 function Nav({ label, id, tab, setTab }: any) {
   return (
-    <button
-      onClick={() => setTab(id)}
-      className={`w-full rounded-2xl px-4 py-3 text-left font-bold mb-2 ${tab === id ? "bg-indigo-600" : "bg-slate-800"}`}
-    >
+    <button onClick={() => setTab(id)} className={`w-full rounded-2xl px-4 py-3 text-left font-bold mb-2 ${tab === id ? "bg-indigo-600" : "bg-slate-800"}`}>
       {label}
     </button>
   );
@@ -1003,7 +1120,7 @@ function Stat({ title, value }: { title: string; value: any }) {
   );
 }
 
-function OrderBox({ order, isAdmin, users = [], onCancel, onCheck, onReuse }: any) {
+function OrderBox({ order, isAdmin, users = [], onCheck, onReuse }: any) {
   const orderUser = users.find((u: User) => u.id === order.userId);
 
   return (
@@ -1017,26 +1134,18 @@ function OrderBox({ order, isAdmin, users = [], onCancel, onCheck, onReuse }: an
             Nhà mạng: {order.carrier || "Tất cả"} | Trạng thái: {order.status} | Giá: {money(order.price)}
           </p>
 
-          <p className="text-xs text-slate-400">
-            {new Date(order.createdAt).toLocaleString("vi-VN")}
-          </p>
+          <p className="text-xs text-slate-400">{new Date(order.createdAt).toLocaleString("vi-VN")}</p>
         </div>
 
         <div className="flex gap-2 flex-wrap">
           {order.status === "waiting" && (
-            <button
-              onClick={() => onCheck(order)}
-              className="bg-indigo-600 text-white rounded-xl px-4 py-2 font-bold"
-            >
+            <button onClick={() => onCheck(order)} className="bg-indigo-600 text-white rounded-xl px-4 py-2 font-bold">
               Check OTP
             </button>
           )}
 
           {order.provider === "codesim" && order.status === "done" && (
-            <button
-              onClick={() => onReuse(order)}
-              className="bg-emerald-600 text-white rounded-xl px-4 py-2 font-bold"
-            >
+            <button onClick={() => onReuse(order)} className="bg-emerald-600 text-white rounded-xl px-4 py-2 font-bold">
               Thuê lại
             </button>
           )}
@@ -1054,16 +1163,10 @@ function OrderBox({ order, isAdmin, users = [], onCancel, onCheck, onReuse }: an
           <b>OTP: {order.code}</b>
         </div>
       ) : (
-        order.status === "waiting" && (
-          <p className="mt-3 text-slate-500">Đang tự động chờ OTP...</p>
-        )
+        order.status === "waiting" && <p className="mt-3 text-slate-500">Đang tự động chờ OTP...</p>
       )}
 
-      {order.sms && (
-        <pre className="mt-3 bg-slate-100 rounded-xl p-3 whitespace-pre-wrap text-sm">
-          {order.sms}
-        </pre>
-      )}
+      {order.sms && <pre className="mt-3 bg-slate-100 rounded-xl p-3 whitespace-pre-wrap text-sm">{order.sms}</pre>}
     </div>
   );
 }
