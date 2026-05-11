@@ -109,8 +109,8 @@ type ProviderSettings = {
 };
 
 const defaultSettings: Settings = {
-  siteName: "Có All Dịch Vụ",
-  logoText: "H",
+  siteName: "OTP 24H",
+  logoText: "OTP",
   logoImage: "",
   background: "bg-slate-950",
   announcement: "",
@@ -185,7 +185,6 @@ export default function App() {
   const [dmxProducts, setDmxProducts] = useState<DmxProduct[]>([]);
   const [dmxOrders, setDmxOrders] = useState<DmxOrder[]>([]);
   const [dmxSearch, setDmxSearch] = useState("");
-  const [dmxCategoryFilter, setDmxCategoryFilter] = useState("all");
   const [newDmxName, setNewDmxName] = useState("");
   const [newDmxPrice, setNewDmxPrice] = useState("");
   const [newDmxCategory, setNewDmxCategory] = useState("");
@@ -219,10 +218,9 @@ export default function App() {
   const [chayApiKey, setChayApiKey] = useState("");
   const [codesimApiKey, setCodesimApiKey] = useState("");
   const [providerTest, setProviderTest] = useState<any>(null);
-  const [token, setToken] = useState(() => localStorage.getItem("otp24h_token") || "");
 
-  const headers = token
-    ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+  const headers = user
+    ? { "Content-Type": "application/json", "x-user-id": user.id }
     : { "Content-Type": "application/json" };
 
   const isAdmin = user?.role === "admin";
@@ -289,29 +287,14 @@ export default function App() {
   };
 
   const loadOrders = async () => {
-    const currentToken = token || localStorage.getItem("otp24h_token") || "";
-
-    if (!currentToken) return;
-
-    const res = await fetch("/api/orders", {
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${currentToken}`
-      }
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      setOrders(Array.isArray(data) ? data : []);
-    } else {
-      const err = await res.json().catch(() => ({}));
-      show(err.message || "Không tải được lịch sử thuê sim");
-    }
+    if (!user) return;
+    const res = await fetch(`/api/orders?userId=${user.id}`);
+    if (res.ok) setOrders(await res.json());
   };
 
   const loadTopups = async () => {
     if (!user) return;
-    const res = await fetch("/api/topups", { headers });
+    const res = await fetch(`/api/topups?userId=${user.id}`);
     if (res.ok) setTopups(await res.json());
   };
 
@@ -323,109 +306,45 @@ export default function App() {
 
   const loadDmxOrders = async () => {
     if (!user) return;
-    const res = await fetch("/api/dmx/orders", { headers });
+    const res = await fetch(`/api/dmx/orders?userId=${user.id}`);
     if (res.ok) setDmxOrders(await res.json());
   };
 
   useEffect(() => {
-    const savedToken = localStorage.getItem("otp24h_token");
-    if (!savedToken) return;
-
-    fetch("/api/me", {
-      headers: { Authorization: `Bearer ${savedToken}` }
-    })
-      .then(async res => {
-        if (!res.ok) throw new Error("expired");
-        return res.json();
-      })
-      .then(data => {
-        setToken(savedToken);
-        setUser(data);
-      })
-      .catch(() => {
-        localStorage.removeItem("otp24h_token");
-        setToken("");
-        setUser(null);
-      });
-  }, []);
-
-  useEffect(() => {
-    // Chỉ tải cài đặt giao diện trước khi đăng nhập.
-    // Không gọi /api/services ở màn login để tránh API thuê sim làm chậm đăng nhập.
     loadSettings();
+    loadServices();
   }, []);
 
   useEffect(() => {
-    if (!user) return;
-
-    // Cho giao diện vào trước, rồi mới tải dữ liệu nền để giảm cảm giác đăng nhập chậm.
-    const timer = window.setTimeout(() => {
+    if (user) {
       loadOrders();
       loadTopups();
-
-      // Admin chỉ load cấu hình API nhẹ, không load danh sách dịch vụ/user/DMX lúc login.
-      if (user.role === "admin") {
-        loadProviderSettings();
-      }
-    }, 100);
-
-    return () => window.clearTimeout(timer);
-  }, [user, token]);
-
-  useEffect(() => {
-    if (!user) return;
-
-    // Dịch vụ OTP chỉ load khi mở tab Dịch vụ OTP hoặc khi user vừa vào tab mặc định.
-    if (tab === "services") {
-      loadServices();
-    }
-
-    // Khách chỉ load DMX khi mở đúng tab DMX.
-    if (tab === "dmx") {
-      loadDmxProducts();
-      loadDmxOrders();
-    }
-
-    // Các dữ liệu nặng của admin chỉ load khi mở đúng tab tương ứng.
-    if (user.role === "admin" && tab === "users") {
       loadUsers();
-    }
-
-    if (user.role === "admin" && tab === "adminServices") {
       loadAdminServices();
-    }
-
-    if (user.role === "admin" && tab === "adminDmx") {
+      loadProviderSettings();
       loadDmxProducts();
       loadDmxOrders();
     }
-
-    if (user.role === "admin" && tab === "adminTopups") {
-      loadTopups();
-    }
-  }, [tab, user]);
+  }, [user, tab]);
 
   useEffect(() => {
     if (!user) return;
 
     const timer = window.setInterval(async () => {
-      const latest = await fetch("/api/orders", { headers });
+      const latest = await fetch(`/api/orders?userId=${user.id}`);
       if (!latest.ok) return;
 
       const list: Order[] = await latest.json();
 
-      for (const order of list.filter(o => {
-        const status = String(o.status || "").toLowerCase();
-        return ["waiting", "pending", "processing"].includes(status);
-      })) {
-        await fetch(`/api/orders/${order.id}/check-code`, { method: "POST", headers });
+      for (const order of list.filter(o => o.status === "waiting")) {
+        await fetch(`/api/orders/${order.id}/check-code`, { method: "POST" });
       }
 
       await loadOrders();
     }, 5000);
 
     return () => window.clearInterval(timer);
-  }, [user, token]);
+  }, [user]);
 
   const login = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -441,9 +360,7 @@ export default function App() {
       const data = await res.json();
       if (!res.ok) return show(data.message || "Đăng nhập thất bại");
 
-      localStorage.setItem("otp24h_token", data.token);
-      setToken(data.token);
-      setUser(data.user);
+      setUser(data);
       show("Đăng nhập thành công");
     } finally {
       setBusy(false);
@@ -464,10 +381,8 @@ export default function App() {
       const data = await res.json();
       if (!res.ok) return show(data.message || "Đăng ký thất bại");
 
-      localStorage.setItem("otp24h_token", data.token);
-      setToken(data.token);
-      setUser(data.user);
-      show("Đăng ký thành công");
+      show("Đăng ký thành công, hãy đăng nhập");
+      setIsLogin(true);
     } finally {
       setBusy(false);
     }
@@ -487,6 +402,7 @@ export default function App() {
         method: "POST",
         headers,
         body: JSON.stringify({
+          userId: user.id,
           appId: service.sourceKey || service.id,
           carrier: selectedCarrier
         })
@@ -495,10 +411,7 @@ export default function App() {
       const data = await res.json();
       if (!res.ok) return show(data.message || "Không lấy được số");
 
-      if (data.user) setUser(data.user);
-      if (data.order) {
-        setOrders(prev => [data.order, ...prev.filter(o => o.id !== data.order.id)]);
-      }
+      setUser(data.user);
       await loadOrders();
       show("Đã lấy số thành công");
     } finally {
@@ -507,7 +420,7 @@ export default function App() {
   };
 
   const checkCode = async (order: Order) => {
-    const res = await fetch(`/api/orders/${order.id}/check-code`, { method: "POST", headers });
+    const res = await fetch(`/api/orders/${order.id}/check-code`, { method: "POST" });
     const data = await res.json();
 
     if (!res.ok) return show(data.message || "Không check được code");
@@ -524,7 +437,7 @@ export default function App() {
   const reuseOrder = async (order: Order) => {
     if (!confirm(`Thuê lại số ${order.number}?`)) return;
 
-    const res = await fetch(`/api/orders/${order.id}/reuse`, { method: "POST", headers });
+    const res = await fetch(`/api/orders/${order.id}/reuse`, { method: "POST" });
     const data = await res.json();
 
     if (!res.ok) return show(data.message || "Không thuê lại được");
@@ -684,7 +597,7 @@ export default function App() {
     const res = await fetch("/api/change-password", {
       method: "POST",
       headers,
-      body: JSON.stringify({ oldPassword, newPassword })
+      body: JSON.stringify({ userId: user.id, oldPassword, newPassword })
     });
 
     const data = await res.json();
@@ -702,7 +615,7 @@ export default function App() {
     const res = await fetch("/api/topups", {
       method: "POST",
       headers,
-      body: JSON.stringify({ amount, note: topupNote })
+      body: JSON.stringify({ userId: user.id, amount, note: topupNote })
     });
 
     const data = await res.json();
@@ -768,6 +681,7 @@ export default function App() {
       method: "POST",
       headers,
       body: JSON.stringify({
+        userId: user.id,
         productId: product.id,
         quantity
       })
@@ -882,10 +796,7 @@ export default function App() {
     [services, search]
   );
 
-  const activeOrders = orders.filter(o => {
-    const status = String(o.status || "").toLowerCase();
-    return ["waiting", "pending", "processing"].includes(status) || (status === "done" && !!o.code);
-  });
+  const activeOrders = orders.filter(o => o.status === "waiting" || (o.status === "done" && o.code));
 
   const filteredAdminServices = useMemo(
     () =>
@@ -897,30 +808,16 @@ export default function App() {
     [adminServices, adminServiceSearch]
   );
 
-  const dmxCategories = useMemo(
-    () =>
-      Array.from(new Set(dmxProducts.map(p => getDmxCategory(p)).filter(Boolean))).sort((a, b) =>
-        a.localeCompare(b, "vi")
-      ),
-    [dmxProducts]
-  );
-
   const filteredDmxProducts = useMemo(
     () =>
       [...dmxProducts]
-        .filter(p => {
-          const matchesSearch = `${p.name} ${p.category || ""} ${p.note || ""}`
-            .toLowerCase()
-            .includes(dmxSearch.toLowerCase());
-          const matchesCategory = dmxCategoryFilter === "all" || getDmxCategory(p) === dmxCategoryFilter;
-          return matchesSearch && matchesCategory;
-        })
+        .filter(p => `${p.name} ${p.category || ""} ${p.note || ""}`.toLowerCase().includes(dmxSearch.toLowerCase()))
         .sort((a, b) => {
           const categoryCompare = getDmxCategory(a).localeCompare(getDmxCategory(b), "vi");
           if (categoryCompare !== 0) return categoryCompare;
           return String(a.name || "").localeCompare(String(b.name || ""), "vi");
         }),
-    [dmxProducts, dmxSearch, dmxCategoryFilter]
+    [dmxProducts, dmxSearch]
   );
 
   if (!user) {
@@ -1010,7 +907,7 @@ export default function App() {
           Đổi mật khẩu
         </button>
 
-        <button onClick={() => { localStorage.removeItem("otp24h_token"); setToken(""); setUser(null); }} className="w-full rounded-2xl px-4 py-3 text-left font-bold bg-rose-600 mt-3">
+        <button onClick={() => setUser(null)} className="w-full rounded-2xl px-4 py-3 text-left font-bold bg-rose-600 mt-3">
           Đăng xuất
         </button>
       </aside>
@@ -1114,18 +1011,6 @@ export default function App() {
                 className="flex-1 border rounded-2xl px-5 py-3"
                 placeholder="Tìm sản phẩm, phân loại hoặc ghi chú..."
               />
-              <select
-                value={dmxCategoryFilter}
-                onChange={e => setDmxCategoryFilter(e.target.value)}
-                className="border rounded-2xl px-5 py-3"
-              >
-                <option value="all">Tất cả danh mục</option>
-                {dmxCategories.map(category => (
-                  <option key={category} value={category}>
-                    {category}
-                  </option>
-                ))}
-              </select>
             </div>
 
             {!filteredDmxProducts.length && (
@@ -1481,51 +1366,6 @@ export default function App() {
                   </div>
                 </div>
               ))}
-            </div>
-
-            <div className="mt-10 border-t pt-6">
-              <h2 className="text-2xl font-black mb-4">Lịch sử đơn DMX</h2>
-
-              <button onClick={loadDmxOrders} className="bg-slate-900 text-white rounded-2xl px-5 py-3 font-bold mb-4">
-                Tải lại lịch sử DMX
-              </button>
-
-              {dmxOrders.length === 0 ? (
-                <div className="bg-slate-50 border rounded-2xl p-5 text-slate-500">Chưa có đơn DMX nào.</div>
-              ) : (
-                <div className="space-y-4">
-                  {dmxOrders.map(o => (
-                    <div key={o.id} className="bg-white border rounded-3xl p-5 shadow-sm">
-                      <div className="flex gap-4">
-                        {o.image && <img src={o.image} className="w-24 h-24 object-cover rounded-2xl" />}
-
-                        <div className="flex-1">
-                          <h3 className="text-xl font-black">{o.productName}</h3>
-                          <p className="text-sm text-slate-500">
-                            User: <b>{o.username || o.userId || "Không rõ"}</b> | Phân loại: {o.category || "Chưa phân loại"}
-                          </p>
-                          <p className="text-sm text-slate-500">
-                            Số lượng: {o.quantity || 1} | Tổng tiền: {money(o.price)} | {new Date(o.createdAt).toLocaleString("vi-VN")}
-                          </p>
-
-                          <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
-                            <p className="font-bold mb-2">Mã đã giao cho khách</p>
-                            <pre className="whitespace-pre-wrap break-all text-sm">
-                              {(o.codes && o.codes.length ? o.codes : [o.code]).filter(Boolean).join("\n")}
-                            </pre>
-                          </div>
-
-                          {o.note && (
-                            <div className="mt-3 bg-slate-100 rounded-2xl p-4 text-sm whitespace-pre-wrap">
-                              {o.note}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           </Panel>
         )}
