@@ -109,8 +109,8 @@ type ProviderSettings = {
 };
 
 const defaultSettings: Settings = {
-  siteName: "OTP 24H",
-  logoText: "OTP",
+  siteName: "Có All Dịch Vụ",
+  logoText: "H",
   logoImage: "",
   background: "bg-slate-950",
   announcement: "",
