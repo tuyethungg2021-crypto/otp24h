@@ -5,13 +5,12 @@ import { MongoClient } from "mongodb";
 
 const app = express();
 const PORT = process.env.PORT || 10000;
-
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = process.env.MONGODB_DB || "otp24h";
 const DATA_COLLECTION = "appdata";
 
-const CHAY_API_KEY = process.env.CHAYCODESO3_API_KEY || "248c26ea0cd1371009db5dd443339ca1";
 const CHAY_API_BASE = "https://chaycodeso3.com/api";
+const CODESIM_API_BASE = "https://apisim.codesim.net";
 
 let mongoClient;
 let mongoCollection;
@@ -21,19 +20,32 @@ app.use(express.json({ limit: "5mb" }));
 
 const defaultData = {
   users: [
-    { id: "admin-1", username: "admin", password: "azhung12", role: "admin", balance: 0, createdAt: new Date().toISOString() }
+    {
+      id: "admin-1",
+      username: "admin",
+      password: "azhung12",
+      role: "admin",
+      balance: 0,
+      createdAt: new Date().toISOString()
+    }
   ],
   settings: {
     siteName: "OTP 24H",
     logoText: "OTP",
     background: "bg-slate-950",
-    announcement: "Chào mừng bạn đến với OTP 24H. Hệ thống thuê sim nhận mã tự động.",
+    announcement: "Chào mừng bạn đến với OTP 24H.\nHệ thống thuê sim nhận mã tự động.",
     bannerImage: "",
     bankName: "TECHCOMBANK",
     bankAccountNumber: "MS00T07014613285196",
     bankBeneficiary: "NGUYEN VAN HUNG",
     bankQrUrl: "",
     topupNote: "Nội dung chuyển khoản: username của bạn. Sau khi chuyển khoản hãy tạo yêu cầu nạp tiền để admin duyệt."
+  },
+  providerSettings: {
+    chayApiKey: process.env.CHAYCODESO3_API_KEY || "DAN_API_KEY_CHAYCODESO3_CU_CUA_M_VAO_DAY",
+    chayEnabled: true,
+    codesimApiKey: process.env.CODESIM_API_KEY || "",
+    codesimEnabled: true
   },
   serviceOverrides: {},
   orders: [],
@@ -42,21 +54,18 @@ const defaultData = {
 
 async function getCollection() {
   if (!MONGODB_URI) throw new Error("Missing MONGODB_URI. Add it in Render Environment.");
-
   if (!mongoClient) {
     mongoClient = new MongoClient(MONGODB_URI);
     await mongoClient.connect();
     mongoCollection = mongoClient.db(DB_NAME).collection(DATA_COLLECTION);
     await mongoCollection.createIndex({ id: 1 }, { unique: true });
   }
-
   return mongoCollection;
 }
 
 async function readData() {
   const collection = await getCollection();
   let doc = await collection.findOne({ id: "main" });
-
   if (!doc) {
     doc = { id: "main", ...defaultData };
     await collection.insertOne(doc);
@@ -66,6 +75,7 @@ async function readData() {
     ...defaultData,
     ...doc,
     settings: { ...defaultData.settings, ...(doc.settings || {}) },
+    providerSettings: { ...defaultData.providerSettings, ...(doc.providerSettings || {}) },
     users: doc.users || defaultData.users,
     serviceOverrides: doc.serviceOverrides || {},
     orders: doc.orders || [],
@@ -110,7 +120,7 @@ async function getJson(url) {
   const response = await fetch(url, {
     method: "GET",
     headers: {
-      "Accept": "application/json, text/plain, */*",
+      Accept: "application/json, text/plain, */*",
       "User-Agent": "Mozilla/5.0 OTP24H"
     }
   });
@@ -129,12 +139,49 @@ async function getJson(url) {
   }
 }
 
-async function callChay(params) {
+function maskKey(key = "") {
+  if (!key) return "";
+  if (key.length <= 14) return "********";
+  return key.slice(0, 8) + "..." + key.slice(-6);
+}
+
+function getChayKey(data) {
+  return data.providerSettings?.chayApiKey || process.env.CHAYCODESO3_API_KEY || "";
+}
+
+function getCodesimKey(data) {
+  return data.providerSettings?.codesimApiKey || process.env.CODESIM_API_KEY || "";
+}
+
+async function callChay(data, params) {
+  const apiKey = getChayKey(data);
+  if (!apiKey) return { ResponseCode: 400, Msg: "Chưa cấu hình chaycodeso3 API key", Result: null };
+
   const url = new URL(CHAY_API_BASE);
-  url.searchParams.set("apik", CHAY_API_KEY);
+  url.searchParams.set("apik", apiKey);
+
   Object.entries(params).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value));
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
   });
+
+  return await getJson(url);
+}
+
+async function callCodesim(data, pathName, params = {}) {
+  const apiKey = getCodesimKey(data);
+  if (!apiKey) return { status: 400, message: "Chưa cấu hình CodeSim API key", data: null };
+
+  const url = new URL(CODESIM_API_BASE + pathName);
+  url.searchParams.set("api_key", apiKey);
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  });
+
   return await getJson(url);
 }
 
@@ -142,22 +189,40 @@ function isChayOk(api) {
   return api && api.ResponseCode === 0;
 }
 
+function isCodesimOk(api) {
+  return api && Number(api.status) === 200;
+}
+
 function serviceFromChay(raw) {
   return {
-    id: normalizeName(raw.Name),
+    id: "chay-" + normalizeName(raw.Name || raw.Id),
     sourceKey: `chaycodeso3:${raw.Id}`,
     provider: "chaycodeso3",
     providerId: raw.Id,
     originalName: raw.Name,
     name: raw.Name,
     providerCost: Number(raw.Cost || 0),
-    price: Number(raw.Cost || 0)
+    price: Number(raw.Cost || 0),
+    hidden: true
+  };
+}
+
+function serviceFromCodesim(raw) {
+  return {
+    id: `codesim-${raw.id}`,
+    sourceKey: `codesim:${raw.id}`,
+    provider: "codesim",
+    providerId: raw.id,
+    originalName: raw.name,
+    name: raw.name,
+    providerCost: Number(raw.price || 0),
+    price: Number(raw.price || 0),
+    hidden: true
   };
 }
 
 function applyOverride(source, overrides) {
   const custom = overrides[source.sourceKey] || {};
-
   return {
     ...source,
     name: custom.name || source.originalName,
@@ -167,16 +232,35 @@ function applyOverride(source, overrides) {
   };
 }
 
-async function getChayServices() {
-  const api = await callChay({ act: "app" });
-  if (!isChayOk(api)) {
-    return { services: [], error: api };
-  }
+async function getChayServices(data) {
+  if (!data.providerSettings?.chayEnabled) return { services: [], error: null };
+  const api = await callChay(data, { act: "app" });
+  if (!isChayOk(api)) return { services: [], error: api };
+  return { services: (api.Result || []).map(serviceFromChay), error: null };
+}
+
+async function getCodesimServices(data) {
+  if (!data.providerSettings?.codesimEnabled) return { services: [], error: null };
+  const api = await callCodesim(data, "/service/get_service_by_api_key");
+  if (!isCodesimOk(api)) return { services: [], error: api };
+  return { services: (api.data || []).map(serviceFromCodesim), error: null };
+}
+
+async function getAllServices(data) {
+  const chay = await getChayServices(data);
+  const codesim = await getCodesimServices(data);
 
   return {
-    services: (api.Result || []).map(serviceFromChay),
-    error: null
+    services: [...(chay.services || []), ...(codesim.services || [])],
+    errors: [
+      chay.error ? { provider: "chaycodeso3", error: chay.error } : null,
+      codesim.error ? { provider: "codesim", error: codesim.error } : null
+    ].filter(Boolean)
   };
+}
+
+function getClientIp(req) {
+  return req.headers["x-forwarded-for"] || req.socket.remoteAddress || "";
 }
 
 app.get("/api/db-status", async (req, res) => {
@@ -190,27 +274,34 @@ app.get("/api/db-status", async (req, res) => {
 
 app.get("/api/source-status", async (req, res) => {
   const data = await readData();
-  const api = await callChay({ act: "app" });
-  const services = isChayOk(api) ? (api.Result || []) : [];
-  const decorated = services.map(serviceFromChay).map(s => applyOverride(s, data.serviceOverrides));
+  const chay = await getChayServices(data);
+  const codesim = await getCodesimServices(data);
+  const all = [...chay.services, ...codesim.services].map(s => applyOverride(s, data.serviceOverrides));
 
   res.json({
     chaycodeso3: {
-      ok: isChayOk(api),
-      serviceCount: services.length,
-      visibleCount: decorated.filter(s => !s.hidden).length,
-      hiddenCount: decorated.filter(s => s.hidden).length,
-      appMessage: api.Msg || api.message || "",
-      appStatus: api.ResponseCode ?? api.status ?? null
+      ok: !chay.error,
+      enabled: !!data.providerSettings.chayEnabled,
+      hasApiKey: !!getChayKey(data),
+      serviceCount: chay.services.length,
+      error: chay.error || null
     },
     codesim: {
-      disabled: true,
-      reason: "Đã tắt Codesim vì bị Cloudflare 403 trên Render"
-    }
+      ok: !codesim.error,
+      enabled: !!data.providerSettings.codesimEnabled,
+      hasApiKey: !!getCodesimKey(data),
+      serviceCount: codesim.services.length,
+      error: codesim.error || null
+    },
+    total: all.length,
+    visible: all.filter(s => !s.hidden).length,
+    hidden: all.filter(s => s.hidden).length
   });
 });
 
-app.get("/api/settings", async (req, res) => res.json((await readData()).settings));
+app.get("/api/settings", async (req, res) => {
+  res.json((await readData()).settings);
+});
 
 app.put("/api/settings", requireAdmin, async (req, res) => {
   const data = req.data;
@@ -219,11 +310,81 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
   res.json(data.settings);
 });
 
+app.get("/api/admin/provider-settings", requireAdmin, async (req, res) => {
+  const data = req.data;
+
+  res.json({
+    chayEnabled: !!data.providerSettings?.chayEnabled,
+    chayApiKeyMasked: maskKey(getChayKey(data)),
+    hasChayApiKey: !!getChayKey(data),
+
+    codesimEnabled: !!data.providerSettings?.codesimEnabled,
+    codesimApiKeyMasked: maskKey(getCodesimKey(data)),
+    hasCodesimApiKey: !!getCodesimKey(data)
+  });
+});
+
+app.put("/api/admin/provider-settings", requireAdmin, async (req, res) => {
+  const data = req.data;
+
+  data.providerSettings = {
+    ...(data.providerSettings || {}),
+    chayEnabled:
+      req.body.chayEnabled !== undefined
+        ? Boolean(req.body.chayEnabled)
+        : !!data.providerSettings?.chayEnabled,
+    codesimEnabled:
+      req.body.codesimEnabled !== undefined
+        ? Boolean(req.body.codesimEnabled)
+        : !!data.providerSettings?.codesimEnabled
+  };
+
+  if (req.body.chayApiKey !== undefined && String(req.body.chayApiKey).trim()) {
+    data.providerSettings.chayApiKey = String(req.body.chayApiKey).trim();
+  }
+
+  if (req.body.codesimApiKey !== undefined && String(req.body.codesimApiKey).trim()) {
+    data.providerSettings.codesimApiKey = String(req.body.codesimApiKey).trim();
+  }
+
+  await writeData(data);
+
+  res.json({
+    chayEnabled: !!data.providerSettings.chayEnabled,
+    chayApiKeyMasked: maskKey(data.providerSettings.chayApiKey),
+    hasChayApiKey: !!data.providerSettings.chayApiKey,
+
+    codesimEnabled: !!data.providerSettings.codesimEnabled,
+    codesimApiKeyMasked: maskKey(data.providerSettings.codesimApiKey),
+    hasCodesimApiKey: !!data.providerSettings.codesimApiKey
+  });
+});
+
+app.get("/api/admin/provider-test", requireAdmin, async (req, res) => {
+  const data = req.data;
+  const chay = await callChay(data, { act: "account" });
+  const codesim = await callCodesim(data, "/yourself/information-by-api-key");
+
+  res.json({
+    ok: isChayOk(chay) && isCodesimOk(codesim),
+    chaycodeso3: {
+      ok: isChayOk(chay),
+      data: chay
+    },
+    codesim: {
+      ok: isCodesimOk(codesim),
+      data: codesim
+    }
+  });
+});
+
 app.post("/api/register", async (req, res) => {
   const { username, password } = req.body;
   const data = await readData();
 
-  if (!username || !password) return res.status(400).json({ message: "Thiếu tài khoản hoặc mật khẩu" });
+  if (!username || !password) {
+    return res.status(400).json({ message: "Thiếu tài khoản hoặc mật khẩu" });
+  }
 
   if (data.users.find(u => u.username.toLowerCase() === String(username).toLowerCase())) {
     return res.status(409).json({ message: "Tài khoản đã tồn tại" });
@@ -235,12 +396,12 @@ app.post("/api/register", async (req, res) => {
     password: String(password),
     role: "user",
     balance: 0,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    registerIp: getClientIp(req)
   };
 
   data.users.push(user);
   await writeData(data);
-
   res.json(publicUser(user));
 });
 
@@ -249,19 +410,20 @@ app.post("/api/login", async (req, res) => {
   const data = await readData();
 
   const user = data.users.find(
-    u => u.username.toLowerCase() === String(username || "").toLowerCase() && u.password === String(password || "")
+    u =>
+      u.username.toLowerCase() === String(username || "").toLowerCase() &&
+      u.password === String(password || "")
   );
 
   if (!user) return res.status(401).json({ message: "Sai tài khoản hoặc mật khẩu" });
-
   res.json(publicUser(user));
 });
 
 app.post("/api/change-password", async (req, res) => {
   const { userId, oldPassword, newPassword } = req.body;
   const data = await readData();
-  const user = data.users.find(u => u.id === userId);
 
+  const user = data.users.find(u => u.id === userId);
   if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
   if (user.password !== oldPassword) return res.status(400).json({ message: "Mật khẩu cũ không đúng" });
   if (!newPassword) return res.status(400).json({ message: "Thiếu mật khẩu mới" });
@@ -274,13 +436,13 @@ app.post("/api/change-password", async (req, res) => {
 app.get("/api/me", async (req, res) => {
   const data = await readData();
   const user = data.users.find(u => u.id === req.query.userId);
-
   if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
-
   res.json(publicUser(user));
 });
 
-app.get("/api/users", requireAdmin, async (req, res) => res.json(req.data.users.map(publicUser)));
+app.get("/api/users", requireAdmin, async (req, res) => {
+  res.json(req.data.users.map(publicUser));
+});
 
 app.post("/api/users/:id/adjust-balance", requireAdmin, async (req, res) => {
   const data = req.data;
@@ -292,7 +454,6 @@ app.post("/api/users/:id/adjust-balance", requireAdmin, async (req, res) => {
 
   user.balance = Math.max(0, Number(user.balance || 0) + amount);
   await writeData(data);
-
   res.json(publicUser(user));
 });
 
@@ -318,7 +479,6 @@ app.delete("/api/users/:id", requireAdmin, async (req, res) => {
 
   data.users = data.users.filter(u => u.id !== req.params.id);
   await writeData(data);
-
   res.json({ success: true });
 });
 
@@ -327,7 +487,9 @@ app.get("/api/user-stats", requireAdmin, async (req, res) => {
 
   const stats = data.users.map(user => {
     const approvedTopups = data.topups.filter(t => t.userId === user.id && t.status === "approved");
-    const usedOrders = data.orders.filter(o => o.userId === user.id && o.status !== "canceled" && !(o.status === "expired" && o.refunded));
+    const usedOrders = data.orders.filter(
+      o => o.userId === user.id && o.status !== "canceled" && !(o.status === "expired" && o.refunded)
+    );
 
     const totalTopup = approvedTopups.reduce((sum, t) => sum + Number(t.amount || 0), 0);
     const totalUsed = usedOrders.reduce((sum, o) => sum + Number(o.price || 0), 0);
@@ -344,44 +506,49 @@ app.get("/api/user-stats", requireAdmin, async (req, res) => {
 });
 
 app.get("/api/provider/account", requireAdmin, async (req, res) => {
+  const data = req.data;
+
   res.json({
-    chaycodeso3: await callChay({ act: "account" }),
-    codesim: {
-      disabled: true,
-      reason: "Đã tắt Codesim vì bị Cloudflare 403 trên Render"
-    }
+    chaycodeso3: await callChay(data, { act: "account" }),
+    codesim: await callCodesim(data, "/yourself/information-by-api-key")
   });
 });
 
 app.get("/api/services", async (req, res) => {
   const data = await readData();
-  const { services, error } = await getChayServices();
+  const { services, errors } = await getAllServices(data);
 
-  if (error) return res.status(502).json({ message: error.Msg || error.message || "Không tải được dịch vụ từ chaycodeso3", error });
+  const decorated = services
+    .map(s => applyOverride(s, data.serviceOverrides))
+    .filter(s => !s.hidden)
+    .sort((a, b) => a.name.localeCompare(b.name));
 
-  res.json(
-    services
-      .map(s => applyOverride(s, data.serviceOverrides))
-      .filter(s => !s.hidden)
-      .sort((a, b) => a.name.localeCompare(b.name))
-  );
+  if (decorated.length === 0 && errors.length) {
+    return res.status(502).json({
+      message: "Không tải được dịch vụ từ API nguồn",
+      errors
+    });
+  }
+
+  res.json(decorated);
 });
 
 app.get("/api/admin/services", requireAdmin, async (req, res) => {
-  const { services, error } = await getChayServices();
+  const data = req.data;
+  const { services, errors } = await getAllServices(data);
 
-  if (error) return res.status(502).json({ message: error.Msg || error.message || "Không tải được dịch vụ từ chaycodeso3", error });
-
-  const decorated = services.map(s => applyOverride(s, req.data.serviceOverrides));
+  const decorated = services
+    .map(s => applyOverride(s, data.serviceOverrides))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   res.json({
-    sources: decorated.sort((a, b) => a.name.localeCompare(b.name)),
-    errors: [],
+    sources: decorated,
+    errors,
     counts: {
-      chaycodeso3: decorated.length,
+      chaycodeso3: decorated.filter(s => s.provider === "chaycodeso3").length,
+      codesim: decorated.filter(s => s.provider === "codesim").length,
       visible: decorated.filter(s => !s.hidden).length,
       hidden: decorated.filter(s => s.hidden).length,
-      codesim: 0,
       total: decorated.length
     }
   });
@@ -401,63 +568,111 @@ app.put("/api/admin/services/:id", requireAdmin, async (req, res) => {
 });
 
 app.post("/api/orders", async (req, res) => {
-  const { userId, appId, carrier, prefix, sendsms, number } = req.body;
+  const { userId, appId, carrier, prefix, sendsms, number, networkId } = req.body;
   const data = await readData();
-  const user = data.users.find(u => u.id === userId);
 
+  const user = data.users.find(u => u.id === userId);
   if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
 
-  const { services, error } = await getChayServices();
-  if (error) return res.status(502).json({ message: "Không tải được dịch vụ từ chaycodeso3", error });
+  const { services, errors } = await getAllServices(data);
+  const service = services
+    .map(s => applyOverride(s, data.serviceOverrides))
+    .find(s => String(s.sourceKey) === String(appId) || String(s.id) === String(appId));
 
-  const service = services.map(s => applyOverride(s, data.serviceOverrides)).find(s => String(s.sourceKey) === String(appId) || String(s.id) === String(appId));
-  if (!service) return res.status(404).json({ message: "Dịch vụ không tồn tại" });
+  if (!service) return res.status(404).json({ message: "Dịch vụ không tồn tại", errors });
   if (service.hidden) return res.status(400).json({ message: "Dịch vụ đang bị ẩn" });
-
   if (Number(user.balance || 0) < Number(service.price || 0)) {
     return res.status(400).json({ message: "Số dư user không đủ" });
   }
 
-  const api = await callChay({
-    act: "number",
-    appId: service.providerId,
-    carrier,
-    prefix,
-    sendsms: sendsms ? 1 : undefined,
-    number
-  });
+  let api;
+  let order;
 
-  if (!isChayOk(api)) {
-    return res.status(400).json({ message: api.Msg || "Không lấy được số", api });
+  if (service.provider === "codesim") {
+    api = await callCodesim(data, "/sim/get_sim", {
+      service_id: service.providerId,
+      network_id: networkId,
+      phone: prefix || number
+    });
+
+    if (!isCodesimOk(api) || !api.data?.phone) {
+      return res.status(400).json({
+        message: api.message || "Không lấy được số CodeSim",
+        api
+      });
+    }
+
+    user.balance = Number(user.balance || 0) - Number(service.price || 0);
+
+    order = {
+      id: "o-" + Date.now(),
+      provider: "codesim",
+      sourceKey: service.sourceKey,
+      providerQueueId: api.data.otpId,
+      providerSimId: api.data.simId,
+      userId,
+      appId: String(service.sourceKey),
+      providerServiceId: service.providerId,
+      appName: service.name,
+      carrier: carrier || "CodeSim",
+      number: api.data.phone,
+      providerCost: Number(api.data.payment || service.providerCost),
+      price: service.price,
+      status: "waiting",
+      code: "",
+      sms: "",
+      refunded: false,
+      createdAt: new Date().toISOString()
+    };
+  } else {
+    api = await callChay(data, {
+      act: "number",
+      appId: service.providerId,
+      carrier,
+      prefix,
+      sendsms: sendsms ? 1 : undefined,
+      number
+    });
+
+    if (!isChayOk(api)) {
+      return res.status(400).json({
+        message: api.Msg || "Không lấy được số",
+        api
+      });
+    }
+
+    user.balance = Number(user.balance || 0) - Number(service.price || 0);
+
+    order = {
+      id: "o-" + Date.now(),
+      provider: "chaycodeso3",
+      sourceKey: service.sourceKey,
+      providerQueueId: api.Result.Id,
+      providerSimId: api.Result.Id,
+      userId,
+      appId: String(service.sourceKey),
+      providerServiceId: service.providerId,
+      appName: service.name,
+      carrier: carrier || "Tất cả",
+      number: api.Result.Number,
+      providerCost: Number(api.Result.Cost || service.providerCost),
+      price: service.price,
+      status: "waiting",
+      code: "",
+      sms: "",
+      refunded: false,
+      createdAt: new Date().toISOString()
+    };
   }
-
-  user.balance = Number(user.balance || 0) - Number(service.price || 0);
-
-  const order = {
-    id: "o-" + Date.now(),
-    provider: "chaycodeso3",
-    sourceKey: service.sourceKey,
-    providerQueueId: api.Result.Id,
-    providerSimId: api.Result.Id,
-    userId,
-    appId: String(service.sourceKey),
-    providerServiceId: service.providerId,
-    appName: service.name,
-    carrier: carrier || "Tất cả",
-    number: api.Result.Number,
-    providerCost: Number(api.Result.Cost || service.providerCost),
-    price: service.price,
-    status: "waiting",
-    code: "",
-    sms: "",
-    refunded: false,
-    createdAt: new Date().toISOString()
-  };
 
   data.orders.unshift(order);
   await writeData(data);
 
-  res.json({ order, user: publicUser(user), api });
+  res.json({
+    order,
+    user: publicUser(user),
+    api
+  });
 });
 
 app.get("/api/orders", async (req, res) => {
@@ -466,7 +681,11 @@ app.get("/api/orders", async (req, res) => {
 
   if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
 
-  res.json(user.role === "admin" ? data.orders : data.orders.filter(o => o.userId === user.id));
+  res.json(
+    user.role === "admin"
+      ? data.orders
+      : data.orders.filter(o => o.userId === user.id)
+  );
 });
 
 app.post("/api/orders/:id/check-code", async (req, res) => {
@@ -475,32 +694,56 @@ app.post("/api/orders/:id/check-code", async (req, res) => {
 
   if (!order) return res.status(404).json({ message: "Không tìm thấy order" });
 
-  const api = await callChay({ act: "code", id: order.providerQueueId });
-
+  let api;
   let updatedUser = null;
 
-  if (api.ResponseCode === 0) {
-    order.status = "done";
-    order.code = api.Result?.Code || "";
-    order.sms = api.Result?.SMS || "";
-    order.callFile = api.Result?.CallFile || "";
-  } else if (api.ResponseCode === 2) {
-    order.status = "expired";
+  if (order.provider === "codesim") {
+    api = await callCodesim(data, "/otp/get_otp_by_phone_api_key", {
+      otp_id: order.providerQueueId
+    });
 
-    if (!order.refunded) {
-      const user = data.users.find(u => u.id === order.userId);
-      if (user) {
-        user.balance = Number(user.balance || 0) + Number(order.price || 0);
-        updatedUser = publicUser(user);
+    if (isCodesimOk(api) && api.data?.code) {
+      order.status = "done";
+      order.code = api.data.code || "";
+      order.sms = api.data.content || "";
+      order.senderName = api.data.senderName || "";
+    }
+  } else {
+    api = await callChay(data, {
+      act: "code",
+      id: order.providerQueueId
+    });
+
+    if (api.ResponseCode === 0) {
+      order.status = "done";
+      order.code = api.Result?.Code || "";
+      order.sms = api.Result?.SMS || "";
+      order.callFile = api.Result?.CallFile || "";
+    } else if (api.ResponseCode === 2) {
+      order.status = "expired";
+
+      if (!order.refunded) {
+        const user = data.users.find(u => u.id === order.userId);
+        if (user) {
+          user.balance = Number(user.balance || 0) + Number(order.price || 0);
+          updatedUser = publicUser(user);
+        }
+
+        order.refunded = true;
+        order.refundedAt = new Date().toISOString();
+        order.refundReason = "expired_no_otp";
       }
-      order.refunded = true;
-      order.refundedAt = new Date().toISOString();
-      order.refundReason = "expired_no_otp";
     }
   }
 
+  order.lastCheckedAt = new Date().toISOString();
   await writeData(data);
-  res.json({ order, api, user: updatedUser });
+
+  res.json({
+    order,
+    api,
+    user: updatedUser
+  });
 });
 
 app.post("/api/orders/:id/cancel", async (req, res) => {
@@ -508,39 +751,122 @@ app.post("/api/orders/:id/cancel", async (req, res) => {
   const order = data.orders.find(o => o.id === req.params.id);
 
   if (!order) return res.status(404).json({ message: "Không tìm thấy order" });
-  if (order.status !== "waiting") return res.status(400).json({ message: "Order không còn trạng thái chờ" });
+  if (order.status !== "waiting") {
+    return res.status(400).json({ message: "Order không còn trạng thái chờ" });
+  }
 
-  const api = await callChay({ act: "expired", id: order.providerQueueId });
-
+  let api;
+  let ok = false;
   let updatedUser = null;
 
-  if (api.ResponseCode === 0) {
+  if (order.provider === "codesim") {
+    api = await callCodesim(data, `/sim/cancel_api_key/${order.providerSimId}`);
+    ok = isCodesimOk(api);
+  } else {
+    api = await callChay(data, {
+      act: "expired",
+      id: order.providerQueueId
+    });
+    ok = api.ResponseCode === 0;
+  }
+
+  if (ok) {
     if (!order.refunded) {
       const user = data.users.find(u => u.id === order.userId);
       if (user) {
         user.balance = Number(user.balance || 0) + Number(order.price || 0);
         updatedUser = publicUser(user);
       }
+
       order.refunded = true;
       order.refundedAt = new Date().toISOString();
       order.refundReason = "user_cancel";
     }
+
     order.status = "canceled";
   }
 
   await writeData(data);
-  res.json({ order, api, user: updatedUser });
+
+  res.json({
+    order,
+    api,
+    user: updatedUser
+  });
+});
+
+app.post("/api/orders/:id/reuse", async (req, res) => {
+  const data = await readData();
+  const order = data.orders.find(o => o.id === req.params.id);
+
+  if (!order) return res.status(404).json({ message: "Không tìm thấy order" });
+  if (order.provider !== "codesim") return res.status(400).json({ message: "Thuê lại chỉ hỗ trợ CodeSim" });
+  if (order.status !== "done") return res.status(400).json({ message: "Chỉ thuê lại số đã lấy code thành công" });
+
+  const user = data.users.find(u => u.id === order.userId);
+  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
+
+  if (Number(user.balance || 0) < Number(order.price || 0)) {
+    return res.status(400).json({ message: "Số dư user không đủ" });
+  }
+
+  const api = await callCodesim(data, "/sim/reuse_by_phone_api_key", {
+    phone: order.number,
+    service_id: order.providerServiceId
+  });
+
+  if (!isCodesimOk(api) || !api.data?.phone) {
+    return res.status(400).json({
+      message: api.message || "Không thuê lại được số",
+      api
+    });
+  }
+
+  user.balance = Number(user.balance || 0) - Number(order.price || 0);
+
+  const newOrder = {
+    id: "o-" + Date.now(),
+    provider: "codesim",
+    sourceKey: order.sourceKey,
+    providerQueueId: api.data.otpId,
+    providerSimId: api.data.simId,
+    userId: user.id,
+    appId: order.appId,
+    providerServiceId: order.providerServiceId,
+    appName: order.appName,
+    carrier: "CodeSim",
+    number: api.data.phone,
+    providerCost: Number(api.data.payment || order.providerCost),
+    price: order.price,
+    status: "waiting",
+    code: "",
+    sms: "",
+    refunded: false,
+    reusedFrom: order.id,
+    createdAt: new Date().toISOString()
+  };
+
+  data.orders.unshift(newOrder);
+  await writeData(data);
+
+  res.json({
+    order: newOrder,
+    user: publicUser(user),
+    api
+  });
 });
 
 app.post("/api/topups", async (req, res) => {
   const { userId, amount, note } = req.body;
   const data = await readData();
-  const user = data.users.find(u => u.id === userId);
 
+  const user = data.users.find(u => u.id === userId);
   if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
 
   const money = Number(amount || 0);
-  if (!money || Number.isNaN(money) || money <= 0) return res.status(400).json({ message: "Số tiền nạp không hợp lệ" });
+  if (!money || Number.isNaN(money) || money <= 0) {
+    return res.status(400).json({ message: "Số tiền nạp không hợp lệ" });
+  }
 
   const topup = {
     id: "t-" + Date.now(),
@@ -564,7 +890,11 @@ app.get("/api/topups", async (req, res) => {
 
   if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
 
-  res.json(user.role === "admin" ? data.topups : data.topups.filter(t => t.userId === user.id));
+  res.json(
+    user.role === "admin"
+      ? data.topups
+      : data.topups.filter(t => t.userId === user.id)
+  );
 });
 
 app.post("/api/topups/:id/approve", requireAdmin, async (req, res) => {
@@ -583,7 +913,11 @@ app.post("/api/topups/:id/approve", requireAdmin, async (req, res) => {
   topup.approvedBy = req.admin.username;
 
   await writeData(data);
-  res.json({ topup, user: publicUser(user) });
+
+  res.json({
+    topup,
+    user: publicUser(user)
+  });
 });
 
 app.post("/api/topups/:id/reject", requireAdmin, async (req, res) => {
@@ -603,6 +937,13 @@ app.post("/api/topups/:id/reject", requireAdmin, async (req, res) => {
 });
 
 const distPath = path.resolve("dist");
+
 app.use(express.static(distPath));
-app.get(/.*/, (req, res) => res.sendFile(path.join(distPath, "index.html")));
-app.listen(PORT, () => console.log("Server running on port " + PORT));
+
+app.get(/.*/, (req, res) => {
+  res.sendFile(path.join(distPath, "index.html"));
+});
+
+app.listen(PORT, () => {
+  console.log("Server running on port " + PORT);
+});
