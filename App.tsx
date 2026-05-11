@@ -335,8 +335,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Chỉ tải cài đặt giao diện trước khi đăng nhập.
+    // Không gọi /api/services ở màn login để tránh API thuê sim làm chậm đăng nhập.
     loadSettings();
-    loadServices();
   }, []);
 
   useEffect(() => {
@@ -358,6 +359,11 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
+
+    // Dịch vụ OTP chỉ load khi mở tab Dịch vụ OTP hoặc khi user vừa vào tab mặc định.
+    if (tab === "services") {
+      loadServices();
+    }
 
     // Khách chỉ load DMX khi mở đúng tab DMX.
     if (tab === "dmx") {
