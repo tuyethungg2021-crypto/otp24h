@@ -1,971 +1,1169 @@
-import express from "express";
-import cors from "cors";
-import path from "path";
-import { MongoClient } from "mongodb";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-const app = express();
-const PORT = process.env.PORT || 10000;
-const MONGODB_URI = process.env.MONGODB_URI;
-const DB_NAME = process.env.MONGODB_DB || "Có All Dịch Vụ";
-const DATA_COLLECTION = "appdata";
-
-const CHAY_API_BASE = "https://chaycodeso3.com/api";
-const CODESIM_API_BASE = "https://apisim.codesim.net";
-const HTTP_TIMEOUT_MS = 15000;
-const SERVICE_CACHE_MS = 1000 * 60 * 5;
-
-let mongoClient;
-let mongoCollection;
-let serviceCache = {
-  key: "",
-  expiresAt: 0,
-  value: null,
+type User = {
+  id: string;
+  username: string;
+  role: "admin" | "user";
+  balance: number;
+  totalTopup?: number;
+  totalUsed?: number;
 };
 
-const defaultData = {
-  users: [
-    {
-      id: "admin-1",
-      username: "admin",
-      password: "azhung12",
-      role: "admin",
-      balance: 0,
-      createdAt: new Date().toISOString(),
-    },
-  ],
-  settings: {
-    siteName: "Có All Dịch Vụ",
-    logoText: "OTP",
-    logoImage: "",
-    background: "bg-slate-950",
-    announcement: "Chào mừng bạn đến với Có All Dịch Vụ.\nHệ thống thuê sim nhận mã tự động.",
-    bannerImage: "",
-    bankName: "TECHCOMBANK",
-    bankAccountNumber: "MS00T07014613285196",
-    bankBeneficiary: "NGUYEN VAN HUNG",
-    bankQrUrl: "",
-    topupNote: "Nội dung chuyển khoản: username của bạn.\nSau khi chuyển khoản hãy tạo yêu cầu nạp tiền để admin duyệt.",
-  },
-  providerSettings: {
-    chayApiKey: process.env.CHAYCODESO3_API_KEY || "248c26ea0cd1371009db5dd443339ca1",
-    chayEnabled: true,
-    codesimApiKey: process.env.CODESIM_API_KEY || "",
-    codesimEnabled: true,
-  },
-  serviceOverrides: {},
-  orders: [],
-  topups: [],
+type Service = {
+  id: string;
+  sourceKey?: string;
+  provider?: string;
+  providerId?: number | string;
+  originalName: string;
+  name: string;
+  providerCost: number;
+  price: number;
+  hidden: boolean;
+  note?: string;
 };
 
-app.disable("x-powered-by");
-app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+type Order = {
+  id: string;
+  userId?: string;
+  appName: string;
+  number: string;
+  price: number;
+  status: string;
+  code?: string;
+  sms?: string;
+  createdAt: string;
+  provider?: string;
+  carrier?: string;
+  refunded?: boolean;
+  refundReason?: string;
+};
 
-function nowIso() {
-  return new Date().toISOString();
-}
+type Settings = {
+  siteName: string;
+  logoText: string;
+  logoImage: string;
+  background: string;
+  announcement: string;
+  bannerImage: string;
+  bankName: string;
+  bankAccountNumber: string;
+  bankBeneficiary: string;
+  bankQrUrl: string;
+  topupNote: string;
+};
 
-function makeId(prefix) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
+type Topup = {
+  id: string;
+  userId: string;
+  username: string;
+  amount: number;
+  note?: string;
+  status: string;
+  createdAt: string;
+};
 
-function normalizeName(name) {
-  return String(name || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "")
-    .trim();
-}
+type ProviderSettings = {
+  chayEnabled: boolean;
+  chayApiKeyMasked: string;
+  hasChayApiKey: boolean;
+  codesimEnabled: boolean;
+  codesimApiKeyMasked: string;
+  hasCodesimApiKey: boolean;
+};
 
-function maskKey(key = "") {
-  if (!key) return "";
-  if (key.length <= 14) return "********";
-  return key.slice(0, 8) + "..." + key.slice(-6);
-}
+type ProviderCounts = {
+  chaycodeso3?: number;
+  codesim?: number;
+  visible?: number;
+  hidden?: number;
+  total?: number;
+};
 
-function publicUser(user) {
-  const { password, ...safe } = user;
-  return safe;
-}
+const defaultSettings: Settings = {
+  siteName: "OTP 24H",
+  logoText: "OTP",
+  logoImage: "",
+  background: "bg-slate-950",
+  announcement: "",
+  bannerImage: "",
+  bankName: "TECHCOMBANK",
+  bankAccountNumber: "MS00T07014613285196",
+  bankBeneficiary: "NGUYEN VAN HUNG",
+  bankQrUrl: "",
+  topupNote: "Nội dung chuyển khoản: username của bạn.\nSau khi chuyển khoản hãy tạo yêu cầu nạp tiền để admin duyệt.",
+};
 
-function getClientIp(req) {
-  return req.headers["x-forwarded-for"] || req.socket.remoteAddress || "";
-}
+const defaultProviderSettings: ProviderSettings = {
+  chayEnabled: true,
+  chayApiKeyMasked: "",
+  hasChayApiKey: false,
+  codesimEnabled: true,
+  codesimApiKeyMasked: "",
+  hasCodesimApiKey: false,
+};
 
-function getChayKey(data) {
-  return data.providerSettings?.chayApiKey || process.env.CHAYCODESO3_API_KEY || "";
-}
+const carriers = [
+  { label: "Tất cả nhà mạng", value: "" },
+  { label: "Viettel", value: "Viettel" },
+  { label: "Mobi", value: "Mobi" },
+  { label: "Vina", value: "Vina" },
+  { label: "VNMB", value: "VNMB" },
+  { label: "ITelecom", value: "ITelecom" },
+];
 
-function getCodesimKey(data) {
-  return data.providerSettings?.codesimApiKey || process.env.CODESIM_API_KEY || "";
-}
+const tabLabels: Record<string, string> = {
+  services: "Dịch vụ",
+  orders: "Đơn thuê",
+  topup: "Nạp tiền",
+  adminTopups: "Duyệt nạp",
+  users: "Người dùng",
+  adminServices: "Quản lý dịch vụ",
+  api: "API",
+  settings: "Cài đặt",
+};
 
-function serviceCacheKey(data) {
-  return JSON.stringify({
-    chayEnabled: !!data.providerSettings?.chayEnabled,
-    codesimEnabled: !!data.providerSettings?.codesimEnabled,
-    chayKey: getChayKey(data) ? "1" : "0",
-    codesimKey: getCodesimKey(data) ? "1" : "0",
-  });
-}
+const money = (n: number) => Number(n || 0).toLocaleString("vi-VN") + "đ";
+const sleep = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms));
 
-function clearServiceCache() {
-  serviceCache = { key: "", expiresAt: 0, value: null };
-}
-
-async function getCollection() {
-  if (!MONGODB_URI) {
-    throw new Error("Missing MONGODB_URI. Add it in Render Environment.");
+function getSavedUser() {
+  try {
+    const raw = localStorage.getItem("otp24h_user");
+    return raw ? (JSON.parse(raw) as User) : null;
+  } catch {
+    return null;
   }
+}
 
-  if (!mongoClient) {
-    mongoClient = new MongoClient(MONGODB_URI, {
-      maxPoolSize: 10,
-      minPoolSize: 0,
-      serverSelectionTimeoutMS: 10000,
-      connectTimeoutMS: 10000,
+async function apiFetch<T>(url: string, options: RequestInit = {}, timeoutMs = 15000): Promise<T> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal,
     });
-    await mongoClient.connect();
-    mongoCollection = mongoClient.db(DB_NAME).collection(DATA_COLLECTION);
-    await mongoCollection.createIndex({ id: 1 }, { unique: true });
-  }
 
-  return mongoCollection;
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : {};
+
+    if (!res.ok) {
+      throw new Error(data?.message || "Có lỗi xảy ra");
+    }
+
+    return data as T;
+  } catch (error: any) {
+    if (error?.name === "AbortError") {
+      throw new Error("Server phản hồi quá lâu, vui lòng thử lại");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
-async function readData() {
-  const collection = await getCollection();
-  let doc = await collection.findOne({ id: "main" });
+export default function App() {
+  const [user, setUserState] = useState<User | null>(() => getSavedUser());
+  const [users, setUsers] = useState<User[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
+  const [adminServices, setAdminServices] = useState<Service[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [topups, setTopups] = useState<Topup[]>([]);
+  const [settings, setSettings] = useState<Settings>(defaultSettings);
+  const [tab, setTab] = useState("services");
+  const [isLogin, setIsLogin] = useState(true);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [notice, setNotice] = useState("");
+  const [search, setSearch] = useState("");
+  const [adminServiceSearch, setAdminServiceSearch] = useState("");
+  const [selectedCarrier, setSelectedCarrier] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [topupAmount, setTopupAmount] = useState("");
+  const [topupNote, setTopupNote] = useState("");
+  const [providerCounts, setProviderCounts] = useState<ProviderCounts>({});
+  const [providerSettings, setProviderSettings] = useState<ProviderSettings>(defaultProviderSettings);
+  const [chayApiKey, setChayApiKey] = useState("");
+  const [codesimApiKey, setCodesimApiKey] = useState("");
+  const [providerTest, setProviderTest] = useState<any>(null);
 
-  if (!doc) {
-    doc = { id: "main", ...defaultData, createdAt: nowIso(), updatedAt: nowIso() };
-    await collection.insertOne(doc);
-  }
+  const toastTimer = useRef<number | null>(null);
+  const checkingRef = useRef(false);
+  const isAdmin = user?.role === "admin";
 
-  return {
-    ...defaultData,
-    ...doc,
-    settings: { ...defaultData.settings, ...(doc.settings || {}) },
-    providerSettings: { ...defaultData.providerSettings, ...(doc.providerSettings || {}) },
-    users: doc.users || defaultData.users,
-    serviceOverrides: doc.serviceOverrides || {},
-    orders: doc.orders || [],
-    topups: doc.topups || [],
+  const setUser = useCallback((next: User | null) => {
+    setUserState(next);
+    if (next) localStorage.setItem("otp24h_user", JSON.stringify(next));
+    else localStorage.removeItem("otp24h_user");
+  }, []);
+
+  const headers = useMemo(() => {
+    const base: Record<string, string> = { "Content-Type": "application/json" };
+    if (user?.id) base["x-user-id"] = user.id;
+    return base;
+  }, [user?.id]);
+
+  const show = useCallback((msg: string) => {
+    setNotice(msg);
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setNotice(""), 3500);
+  }, []);
+
+  const imageToBase64 = useCallback(
+    (file: File, callback: (value: string) => void) => {
+      if (!file.type.startsWith("image/")) return show("Chỉ được tải file ảnh");
+      if (file.size > 1024 * 1024 * 2) return show("Ảnh tối đa 2MB");
+
+      const reader = new FileReader();
+      reader.onload = () => callback(String(reader.result));
+      reader.readAsDataURL(file);
+    },
+    [show]
+  );
+
+  const loadSettings = useCallback(async () => {
+    const data = await apiFetch<Partial<Settings>>("/api/settings", {}, 10000);
+    setSettings({ ...defaultSettings, ...data });
+  }, []);
+
+  const loadServices = useCallback(async () => {
+    const data = await apiFetch<Service[]>("/api/services", {}, 15000);
+    setServices(data || []);
+  }, []);
+
+  const loadOrders = useCallback(async () => {
+    if (!user) return [] as Order[];
+    const data = await apiFetch<Order[]>(`/api/orders?userId=${encodeURIComponent(user.id)}`, {}, 12000);
+    setOrders(data || []);
+    return data || [];
+  }, [user]);
+
+  const loadTopups = useCallback(async () => {
+    if (!user) return;
+    const data = await apiFetch<Topup[]>(`/api/topups?userId=${encodeURIComponent(user.id)}`, {}, 12000);
+    setTopups(data || []);
+  }, [user]);
+
+  const loadUsers = useCallback(async () => {
+    if (!user || !isAdmin) return;
+    const data = await apiFetch<User[]>("/api/user-stats", { headers }, 12000);
+    setUsers(data || []);
+  }, [headers, isAdmin, user]);
+
+  const loadAdminServices = useCallback(
+    async (force = false) => {
+      if (!user || !isAdmin) return;
+      const data = await apiFetch<{ sources: Service[]; counts: ProviderCounts }>(`/api/admin/services${force ? "?force=1" : ""}`, { headers }, 20000);
+      setAdminServices(data.sources || []);
+      setProviderCounts(data.counts || {});
+    },
+    [headers, isAdmin, user]
+  );
+
+  const loadProviderSettings = useCallback(async () => {
+    if (!user || !isAdmin) return;
+    const data = await apiFetch<ProviderSettings>("/api/admin/provider-settings", { headers }, 12000);
+    setProviderSettings({ ...defaultProviderSettings, ...data });
+  }, [headers, isAdmin, user]);
+
+  const refreshCurrentTab = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      if (tab === "services") await loadServices();
+      if (tab === "orders") await loadOrders();
+      if (tab === "topup") await loadTopups();
+      if (isAdmin && tab === "adminTopups") await loadTopups();
+      if (isAdmin && tab === "users") await loadUsers();
+      if (isAdmin && tab === "adminServices") await loadAdminServices();
+      if (isAdmin && tab === "api") await loadProviderSettings();
+    } catch (error: any) {
+      show(error.message || "Không tải được dữ liệu");
+    } finally {
+      setLoading(false);
+    }
+  }, [isAdmin, loadAdminServices, loadOrders, loadProviderSettings, loadServices, loadTopups, loadUsers, show, tab, user]);
+
+  useEffect(() => {
+    Promise.allSettled([loadSettings(), loadServices()]).catch(() => undefined);
+  }, [loadSettings, loadServices]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    setLoading(true);
+    const common = [loadOrders(), loadTopups()];
+    const admin = isAdmin ? [loadUsers(), loadAdminServices(), loadProviderSettings()] : [];
+
+    Promise.allSettled([...common, ...admin])
+      .then(results => {
+        const rejected = results.find(r => r.status === "rejected") as PromiseRejectedResult | undefined;
+        if (rejected) show(rejected.reason?.message || "Có dữ liệu chưa tải được");
+      })
+      .finally(() => setLoading(false));
+  }, [isAdmin, loadAdminServices, loadOrders, loadProviderSettings, loadTopups, loadUsers, show, user]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const poll = async () => {
+      if (checkingRef.current || document.hidden) return;
+      const waiting = orders.filter(o => o.status === "waiting");
+      if (!waiting.length) return;
+
+      checkingRef.current = true;
+      try {
+        const checking = waiting.slice(0, 5);
+        await Promise.allSettled(
+          checking.map(order =>
+            apiFetch(`/api/orders/${order.id}/check-code`, {
+              method: "POST",
+              headers,
+            }, 12000)
+          )
+        );
+        await loadOrders();
+      } finally {
+        checkingRef.current = false;
+      }
+    };
+
+    const timer = window.setInterval(poll, 7000);
+    return () => window.clearInterval(timer);
+  }, [headers, loadOrders, orders, user]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (!document.hidden && user) loadOrders().catch(() => undefined);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [loadOrders, user]);
+
+  const login = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+
+    try {
+      const data = await apiFetch<User>("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: username.trim(), password }),
+      });
+      setUser(data);
+      show("Đăng nhập thành công");
+    } catch (error: any) {
+      show(error.message || "Đăng nhập thất bại");
+    } finally {
+      setBusy(false);
+    }
   };
-}
 
-async function writeData(data) {
-  const collection = await getCollection();
-  const { _id, ...clean } = data;
-  await collection.updateOne(
-    { id: "main" },
-    { $set: { ...clean, id: "main", updatedAt: nowIso() } },
-    { upsert: true }
+  const register = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+
+    try {
+      await apiFetch("/api/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: username.trim(), password }),
+      });
+      show("Đăng ký thành công, hãy đăng nhập");
+      setIsLogin(true);
+    } catch (error: any) {
+      show(error.message || "Đăng ký thất bại");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rentNumber = async (service: Service) => {
+    if (!user || busy) return;
+    const carrierText = service.provider === "codesim" ? "Tự động" : selectedCarrier || "Tất cả nhà mạng";
+    if (!confirm(`Thuê ${service.name} giá ${money(service.price)}?\nNhà mạng: ${carrierText}`)) return;
+
+    setBusy(true);
+    try {
+      const data = await apiFetch<{ order: Order; user: User }>("/api/orders", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ userId: user.id, appId: service.sourceKey || service.id, carrier: selectedCarrier }),
+      }, 20000);
+
+      if (data.user) setUser(data.user);
+      await loadOrders();
+      setTab("orders");
+      show("Đã lấy số thành công");
+    } catch (error: any) {
+      show(error.message || "Không lấy được số");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const checkCode = async (order: Order) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const data = await apiFetch<{ order: Order; api?: any; user?: User }>(`/api/orders/${order.id}/check-code`, {
+        method: "POST",
+        headers,
+      }, 15000);
+
+      if (data.user) setUser(data.user);
+      await loadOrders();
+
+      if (data.order?.status === "expired" && data.order?.refunded) show("Số đã hết hạn, hệ thống đã hoàn tiền");
+      else if (data.order?.code) show("Đã có OTP");
+      else show(data.api?.Msg || data.api?.message || "Đang chờ OTP");
+    } catch (error: any) {
+      show(error.message || "Không check được code");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reuseOrder = async (order: Order) => {
+    if (busy) return;
+    if (!confirm(`Thuê lại số ${order.number}?`)) return;
+
+    setBusy(true);
+    try {
+      const data = await apiFetch<{ order: Order; user?: User }>(`/api/orders/${order.id}/reuse`, {
+        method: "POST",
+        headers,
+      }, 20000);
+      if (data.user) setUser(data.user);
+      await loadOrders();
+      show("Đã thuê lại số");
+    } catch (error: any) {
+      show(error.message || "Không thuê lại được");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const adjustBalance = async (target: User) => {
+    const amount = prompt(`Nhập số tiền cộng/trừ cho ${target.username}`);
+    if (!amount) return;
+
+    try {
+      await apiFetch(`/api/users/${target.id}/adjust-balance`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ amount: Number(amount) }),
+      });
+      await loadUsers();
+      show("Đã cập nhật số dư");
+    } catch (error: any) {
+      show(error.message || "Lỗi sửa tiền");
+    }
+  };
+
+  const changeUserPass = async (target: User) => {
+    const newPassword = prompt(`Mật khẩu mới cho ${target.username}`);
+    if (!newPassword) return;
+
+    try {
+      await apiFetch(`/api/users/${target.id}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ password: newPassword }),
+      });
+      show("Đã đổi mật khẩu");
+    } catch (error: any) {
+      show(error.message || "Lỗi đổi mật khẩu");
+    }
+  };
+
+  const deleteUser = async (target: User) => {
+    if (!confirm(`Xóa user ${target.username}?`)) return;
+
+    try {
+      await apiFetch(`/api/users/${target.id}`, { method: "DELETE", headers });
+      await loadUsers();
+      show("Đã xóa user");
+    } catch (error: any) {
+      show(error.message || "Lỗi xóa user");
+    }
+  };
+
+  const saveService = async (service: Service, patch: Partial<Service>) => {
+    const key = service.sourceKey || service.id;
+
+    try {
+      await apiFetch(`/api/admin/services/${encodeURIComponent(key)}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(patch),
+      });
+      await Promise.allSettled([loadAdminServices(), loadServices()]);
+      show("Đã lưu dịch vụ");
+    } catch (error: any) {
+      show(error.message || "Lỗi lưu dịch vụ");
+    }
+  };
+
+  const bulkSetHidden = async (hidden: boolean, onlyFiltered = false) => {
+    const list = onlyFiltered ? filteredAdminServices : adminServices;
+    if (!list.length) return show("Không có dịch vụ nào để cập nhật");
+    if (!confirm(`${hidden ? "ẨN" : "HIỆN"} ${list.length} dịch vụ?`)) return;
+
+    setBusy(true);
+    try {
+      const batchSize = 10;
+      for (let i = 0; i < list.length; i += batchSize) {
+        const batch = list.slice(i, i + batchSize);
+        await Promise.allSettled(
+          batch.map(s =>
+            apiFetch(`/api/admin/services/${encodeURIComponent(s.sourceKey || s.id)}`, {
+              method: "PUT",
+              headers,
+              body: JSON.stringify({ hidden }),
+            }, 12000)
+          )
+        );
+        await sleep(120);
+      }
+      await Promise.allSettled([loadAdminServices(), loadServices()]);
+      show("Đã cập nhật dịch vụ");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveSettings = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await apiFetch("/api/settings", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(settings),
+      });
+      show("Đã lưu cài đặt");
+    } catch (error: any) {
+      show(error.message || "Lỗi lưu cài đặt");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveProviderSettings = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const data = await apiFetch<ProviderSettings>("/api/admin/provider-settings", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          chayEnabled: providerSettings.chayEnabled,
+          chayApiKey,
+          codesimEnabled: providerSettings.codesimEnabled,
+          codesimApiKey,
+        }),
+      });
+      setChayApiKey("");
+      setCodesimApiKey("");
+      setProviderSettings(data);
+      await Promise.allSettled([loadAdminServices(true), loadServices()]);
+      show("Đã lưu cấu hình API");
+    } catch (error: any) {
+      show(error.message || "Lỗi lưu API key");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const testProvider = async () => {
+    try {
+      const data = await apiFetch<any>("/api/admin/provider-test", { headers }, 20000);
+      setProviderTest(data);
+      show(data.ok ? "Cả 2 API hoạt động" : "Có API đang lỗi, xem kết quả test bên dưới");
+    } catch (error: any) {
+      show(error.message || "Không test được API");
+    }
+  };
+
+  const changeOwnPassword = async () => {
+    if (!user) return;
+    const oldPassword = prompt("Nhập mật khẩu cũ");
+    const newPassword = prompt("Nhập mật khẩu mới");
+    if (!oldPassword || !newPassword) return;
+
+    try {
+      await apiFetch("/api/change-password", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ userId: user.id, oldPassword, newPassword }),
+      });
+      show("Đã đổi mật khẩu");
+    } catch (error: any) {
+      show(error.message || "Lỗi đổi mật khẩu");
+    }
+  };
+
+  const createTopup = async () => {
+    if (!user || busy) return;
+    const amount = Number(topupAmount || 0);
+    if (!amount || Number.isNaN(amount) || amount <= 0) return show("Nhập số tiền nạp hợp lệ");
+
+    setBusy(true);
+    try {
+      await apiFetch("/api/topups", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ userId: user.id, amount, note: topupNote }),
+      });
+      setTopupAmount("");
+      setTopupNote("");
+      await loadTopups();
+      show("Đã gửi yêu cầu nạp tiền");
+    } catch (error: any) {
+      show(error.message || "Lỗi tạo yêu cầu nạp");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const approveTopup = async (topup: Topup) => {
+    try {
+      await apiFetch(`/api/topups/${topup.id}/approve`, { method: "POST", headers });
+      await Promise.allSettled([loadTopups(), loadUsers()]);
+      show("Đã cộng tiền cho user");
+    } catch (error: any) {
+      show(error.message || "Lỗi duyệt nạp");
+    }
+  };
+
+  const rejectTopup = async (topup: Topup) => {
+    const reason = prompt("Lý do từ chối", "") || "";
+    try {
+      await apiFetch(`/api/topups/${topup.id}/reject`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ reason }),
+      });
+      await loadTopups();
+      show("Đã từ chối yêu cầu");
+    } catch (error: any) {
+      show(error.message || "Lỗi từ chối");
+    }
+  };
+
+  const filteredServices = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return services;
+    return services.filter(s => `${s.name} ${s.originalName || ""} ${s.provider || ""}`.toLowerCase().includes(q));
+  }, [services, search]);
+
+  const activeOrders = useMemo(() => orders.filter(o => o.status === "waiting" || (o.status === "done" && o.code)), [orders]);
+
+  const filteredAdminServices = useMemo(() => {
+    const q = adminServiceSearch.trim().toLowerCase();
+    if (!q) return adminServices;
+    return adminServices.filter(s => `${s.originalName} ${s.name} ${s.id} ${s.provider || ""} ${s.providerId || ""}`.toLowerCase().includes(q));
+  }, [adminServices, adminServiceSearch]);
+
+  if (!user) {
+    return (
+      <div className={`${settings.background || "bg-slate-950"} min-h-screen flex items-center justify-center p-4`}>
+        {notice && <Toast>{notice}</Toast>}
+        <div className="bg-white rounded-3xl p-8 shadow max-w-md w-full">
+          <div className="text-center mb-7">
+            {settings.logoImage ? (
+              <img src={settings.logoImage} className="w-24 h-24 mx-auto rounded-3xl object-cover" />
+            ) : (
+              <div className="w-24 h-24 mx-auto rounded-3xl bg-indigo-600 text-white flex items-center justify-center text-3xl font-black">
+                {settings.logoText}
+              </div>
+            )}
+            <h1 className="text-3xl font-black mt-4">{settings.siteName}</h1>
+          </div>
+
+          <form onSubmit={isLogin ? login : register}>
+            <h2 className="text-xl font-black mb-4">{isLogin ? "Đăng nhập tài khoản" : "Tạo tài khoản mới"}</h2>
+            <input value={username} onChange={e => setUsername(e.target.value)} className="w-full border rounded-2xl px-5 py-4 mb-4" placeholder="Tài khoản" autoComplete="username" />
+            <input value={password} onChange={e => setPassword(e.target.value)} type="password" className="w-full border rounded-2xl px-5 py-4 mb-4" placeholder="Mật khẩu" autoComplete={isLogin ? "current-password" : "new-password"} />
+            <button disabled={busy} className="w-full bg-indigo-600 disabled:bg-slate-400 text-white rounded-2xl py-4 font-black">
+              {busy ? "Đang xử lý..." : isLogin ? "ĐĂNG NHẬP" : "ĐĂNG KÝ"}
+            </button>
+          </form>
+
+          <button onClick={() => setIsLogin(!isLogin)} className="mt-5 w-full text-indigo-600 font-bold">
+            {isLogin ? "Chưa có tài khoản? Đăng ký" : "Đã có tài khoản? Đăng nhập"}
+          </button>
+          <p className="text-center text-xs text-slate-400 mt-4">Admin mặc định: admin / azhung12</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`${settings.background || "bg-slate-950"} min-h-screen text-slate-900`}>
+      {notice && <Toast>{notice}</Toast>}
+
+      <div className="grid lg:grid-cols-[280px_1fr] min-h-screen">
+        <aside className="bg-slate-950 text-white p-5 lg:sticky lg:top-0 lg:h-screen overflow-y-auto">
+          <div className="flex items-center gap-3 mb-5">
+            {settings.logoImage ? (
+              <img src={settings.logoImage} className="w-14 h-14 rounded-2xl object-cover" />
+            ) : (
+              <div className="w-14 h-14 rounded-2xl bg-indigo-600 flex items-center justify-center font-black">
+                {settings.logoText}
+              </div>
+            )}
+            <div>
+              <h2 className="font-black text-xl">{settings.siteName}</h2>
+              <p className="text-xs text-slate-400">{user.username}</p>
+            </div>
+          </div>
+
+          <div className="bg-slate-800 rounded-2xl p-4 mb-4">
+            <p className="text-xs text-slate-400">Số dư</p>
+            <p className="text-2xl font-black">{money(user.balance)}</p>
+          </div>
+
+          <nav className="hidden lg:block">
+            <Nav label="Dịch vụ" id="services" tab={tab} setTab={setTab} />
+            <Nav label="Đơn thuê" id="orders" tab={tab} setTab={setTab} />
+            <Nav label="Nạp tiền" id="topup" tab={tab} setTab={setTab} />
+            {isAdmin && (
+              <>
+                <Nav label="Duyệt nạp" id="adminTopups" tab={tab} setTab={setTab} />
+                <Nav label="Người dùng" id="users" tab={tab} setTab={setTab} />
+                <Nav label="Quản lý dịch vụ" id="adminServices" tab={tab} setTab={setTab} />
+                <Nav label="API" id="api" tab={tab} setTab={setTab} />
+                <Nav label="Cài đặt" id="settings" tab={tab} setTab={setTab} />
+              </>
+            )}
+          </nav>
+
+          <div className="flex gap-2 mt-4 flex-wrap lg:block lg:space-y-2">
+            <button onClick={changeOwnPassword} className="rounded-2xl px-4 py-3 text-left font-bold bg-slate-800">
+              Đổi mật khẩu
+            </button>
+            <button onClick={() => setUser(null)} className="rounded-2xl px-4 py-3 text-left font-bold bg-rose-600">
+              Đăng xuất
+            </button>
+          </div>
+        </aside>
+
+        <main className="p-4 md:p-8 overflow-x-hidden">
+          <div className="lg:hidden flex gap-2 overflow-x-auto pb-4">
+            {["services", "orders", "topup", ...(isAdmin ? ["adminTopups", "users", "adminServices", "api", "settings"] : [])].map(t => (
+              <button key={t} onClick={() => setTab(t)} className={`${tab === t ? "bg-indigo-600" : "bg-slate-900"} text-white rounded-xl px-4 py-2 whitespace-nowrap`}>
+                {tabLabels[t] || t}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-5">
+            <div>
+              <h1 className="text-3xl font-black text-white lg:text-slate-900">{tabLabels[tab] || tab}</h1>
+              {loading && <p className="text-sm text-slate-200 lg:text-slate-500">Đang tải dữ liệu...</p>}
+            </div>
+            <button onClick={refreshCurrentTab} disabled={loading} className="bg-slate-900 text-white rounded-2xl px-5 py-3 font-bold disabled:bg-slate-400">
+              Tải lại
+            </button>
+          </div>
+
+          {!isAdmin && activeOrders.length > 0 && (
+            <Panel title="Đơn đang hoạt động">
+              <div className="grid gap-3">
+                {activeOrders.map(o => (
+                  <OrderBox key={o.id} order={o} isAdmin={false} onCheck={checkCode} onReuse={reuseOrder} />
+                ))}
+              </div>
+            </Panel>
+          )}
+
+          {settings.announcement && (
+            <div className="bg-amber-50 border border-amber-200 rounded-3xl p-5 mb-6 whitespace-pre-wrap font-semibold">
+              {settings.announcement}
+            </div>
+          )}
+
+          {settings.bannerImage && <img src={settings.bannerImage} className="w-full max-h-64 object-cover rounded-3xl mb-6 shadow" />}
+
+          {tab === "services" && (
+            <Panel title="Thuê sim nhận OTP">
+              <div className="flex flex-col md:flex-row gap-3 mb-5">
+                <input value={search} onChange={e => setSearch(e.target.value)} className="flex-1 border rounded-2xl px-5 py-3" placeholder="Tìm dịch vụ..." />
+                <select value={selectedCarrier} onChange={e => setSelectedCarrier(e.target.value)} className="border rounded-2xl px-5 py-3">
+                  {carriers.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                </select>
+              </div>
+
+              {!services.length && (
+                <p className="bg-slate-100 rounded-2xl p-5 font-bold">
+                  Hiện chưa có dịch vụ nào được mở. Admin vào Quản lý dịch vụ để bấm Bỏ ẩn dịch vụ muốn bán.
+                </p>
+              )}
+
+              <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {filteredServices.map(s => (
+                  <div key={s.sourceKey || s.id} className="border rounded-3xl p-5 hover:shadow transition">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-xl font-black">{s.name}</h3>
+                        <p className="text-sm text-slate-500">Dịch vụ nhận OTP tự động</p>
+                      </div>
+                      {s.provider && <span className="text-xs bg-slate-100 rounded-full px-3 py-1">{s.provider}</span>}
+                    </div>
+                    {s.note && <p className="mt-3 text-sm bg-slate-50 rounded-xl p-3 whitespace-pre-wrap">{s.note}</p>}
+                    <p className="text-2xl font-black mt-4 text-indigo-600">{money(s.price)}</p>
+                    <button disabled={busy} onClick={() => rentNumber(s)} className="mt-5 w-full bg-indigo-600 disabled:bg-slate-400 text-white rounded-2xl py-3 font-black">
+                      Thuê số
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+
+          {tab === "orders" && (
+            <Panel title="Lịch sử thuê số">
+              <div className="grid gap-3">
+                {orders.map(o => (
+                  <OrderBox key={o.id} order={o} isAdmin={isAdmin} users={users} onCheck={checkCode} onReuse={reuseOrder} />
+                ))}
+                {!orders.length && <p className="text-slate-500">Chưa có đơn nào.</p>}
+              </div>
+            </Panel>
+          )}
+
+          {tab === "topup" && (
+            <Panel title="Nạp tiền">
+              <div className="grid lg:grid-cols-2 gap-6">
+                <div className="bg-slate-50 rounded-3xl p-5">
+                  <h2 className="text-2xl font-black mb-4">Thông tin chuyển khoản</h2>
+                  <p><b>Ngân hàng:</b> {settings.bankName}</p>
+                  <p><b>Số tài khoản:</b> {settings.bankAccountNumber}</p>
+                  <p><b>Chủ tài khoản:</b> {settings.bankBeneficiary}</p>
+                  <p><b>Nội dung:</b> {user.username}</p>
+                  {settings.bankQrUrl && <img src={settings.bankQrUrl} className="w-60 rounded-2xl object-cover mt-4 border" />}
+                  {settings.topupNote && <pre className="mt-4 bg-white rounded-2xl p-4 whitespace-pre-wrap text-sm">{settings.topupNote}</pre>}
+                </div>
+
+                <div>
+                  <h2 className="text-2xl font-black mb-4">Tạo yêu cầu nạp</h2>
+                  <input value={topupAmount} onChange={e => setTopupAmount(e.target.value)} className="w-full border rounded-2xl px-5 py-4 mb-4" placeholder="Số tiền đã chuyển" inputMode="numeric" />
+                  <input value={topupNote} onChange={e => setTopupNote(e.target.value)} className="w-full border rounded-2xl px-5 py-4 mb-4" placeholder="Ghi chú / mã giao dịch" />
+                  <button disabled={busy} onClick={createTopup} className="bg-indigo-600 disabled:bg-slate-400 text-white rounded-2xl px-6 py-4 font-black">
+                    Gửi yêu cầu nạp tiền
+                  </button>
+                </div>
+              </div>
+
+              <h2 className="text-2xl font-black mt-8 mb-4">Lịch sử nạp tiền</h2>
+              <div className="grid gap-3">
+                {topups.map(t => <TopupBox key={t.id} topup={t} />)}
+                {!topups.length && <p className="text-slate-500">Chưa có lịch sử nạp.</p>}
+              </div>
+            </Panel>
+          )}
+
+          {tab === "adminTopups" && isAdmin && (
+            <Panel title="Duyệt yêu cầu nạp">
+              <div className="grid gap-3">
+                {topups.map(t => (
+                  <div key={t.id} className="border rounded-2xl p-4">
+                    <h3 className="font-black">{t.username} muốn nạp {money(t.amount)}</h3>
+                    <p className="text-sm text-slate-500">Trạng thái: {t.status} | {new Date(t.createdAt).toLocaleString("vi-VN")}</p>
+                    {t.note && <p className="mt-2 bg-slate-50 rounded-xl p-3">Ghi chú: {t.note}</p>}
+                    {t.status === "pending" && (
+                      <div className="flex gap-2 mt-3">
+                        <button onClick={() => approveTopup(t)} className="bg-emerald-600 text-white rounded-xl px-4 py-2 font-bold">Duyệt cộng tiền</button>
+                        <button onClick={() => rejectTopup(t)} className="bg-rose-600 text-white rounded-xl px-4 py-2 font-bold">Từ chối</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+
+          {tab === "users" && isAdmin && (
+            <Panel title="Quản lý user">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-100">
+                      <th className="p-3 text-left">User</th>
+                      <th className="p-3 text-left">Role</th>
+                      <th className="p-3 text-right">Đã nạp</th>
+                      <th className="p-3 text-right">Đã dùng</th>
+                      <th className="p-3 text-right">Còn lại</th>
+                      <th className="p-3 text-left">Hành động</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users.map(u => (
+                      <tr key={u.id} className="border-b">
+                        <td className="p-3 font-bold">{u.username}</td>
+                        <td className="p-3">{u.role}</td>
+                        <td className="p-3 text-right">{money(u.totalTopup || 0)}</td>
+                        <td className="p-3 text-right">{money(u.totalUsed || 0)}</td>
+                        <td className="p-3 text-right font-black">{money(u.balance)}</td>
+                        <td className="p-3">
+                          <div className="flex gap-2 flex-wrap">
+                            <button onClick={() => adjustBalance(u)} className="bg-indigo-600 text-white rounded-xl px-3 py-2 text-sm font-bold">Cộng/trừ</button>
+                            <button onClick={() => changeUserPass(u)} className="bg-amber-500 text-white rounded-xl px-3 py-2 text-sm font-bold">Đổi pass</button>
+                            <button onClick={() => deleteUser(u)} className="bg-rose-600 text-white rounded-xl px-3 py-2 text-sm font-bold">Xóa</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Panel>
+          )}
+
+          {tab === "adminServices" && isAdmin && (
+            <Panel title="Quản lý dịch vụ API">
+              <div className="grid md:grid-cols-5 gap-3 mb-5">
+                <Stat title="Tổng" value={providerCounts.total || adminServices.length} />
+                <Stat title="Đang hiện" value={providerCounts.visible || 0} />
+                <Stat title="Đang ẩn" value={providerCounts.hidden || 0} />
+                <Stat title="ChayCode" value={providerCounts.chaycodeso3 || 0} />
+                <Stat title="CodeSim" value={providerCounts.codesim || 0} />
+              </div>
+
+              <div className="flex flex-wrap gap-2 mb-4">
+                <button onClick={() => loadAdminServices(true)} className="bg-slate-900 text-white rounded-2xl px-5 py-3 font-bold">Tải dịch vụ API</button>
+                <button onClick={() => bulkSetHidden(true, false)} disabled={busy} className="bg-rose-600 disabled:bg-slate-400 text-white rounded-2xl px-5 py-3 font-bold">Ẩn tất cả</button>
+                <button onClick={() => bulkSetHidden(false, true)} disabled={busy} className="bg-emerald-600 disabled:bg-slate-400 text-white rounded-2xl px-5 py-3 font-bold">Hiện dịch vụ đang tìm</button>
+                <button onClick={() => bulkSetHidden(true, true)} disabled={busy} className="bg-amber-500 disabled:bg-slate-400 text-white rounded-2xl px-5 py-3 font-bold">Ẩn dịch vụ đang tìm</button>
+              </div>
+
+              <input value={adminServiceSearch} onChange={e => setAdminServiceSearch(e.target.value)} className="w-full border rounded-2xl px-5 py-4 mb-4" placeholder="Tìm dịch vụ, ID hoặc nguồn..." />
+              <p className="text-sm text-slate-500 mb-4">Mặc định dịch vụ mới từ API sẽ bị ẩn. Muốn bán dịch vụ nào thì tìm rồi bấm “Bỏ ẩn”.</p>
+
+              <div className="grid gap-3">
+                {filteredAdminServices.map(s => (
+                  <AdminServiceBox key={s.sourceKey || s.id} service={s} onSave={saveService} />
+                ))}
+              </div>
+            </Panel>
+          )}
+
+          {tab === "api" && isAdmin && (
+            <Panel title="Cấu hình API nguồn">
+              <p className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-5">
+                API key không hiển thị đầy đủ. Ô nào để trống thì giữ nguyên key cũ, ô nào dán key mới thì backend sẽ lưu key mới vào database.
+              </p>
+
+              <div className="grid lg:grid-cols-2 gap-5">
+                <div className="border rounded-3xl p-5">
+                  <h2 className="text-2xl font-black mb-2">chaycodeso3</h2>
+                  <p className="text-sm text-slate-500 mb-3">Nguồn API cũ đang có sẵn trên web.</p>
+                  <label className="flex gap-2 items-center mb-3">
+                    <input type="checkbox" checked={providerSettings.chayEnabled} onChange={e => setProviderSettings({ ...providerSettings, chayEnabled: e.target.checked })} />
+                    Bật nguồn này
+                  </label>
+                  <p>Trạng thái key: {providerSettings.hasChayApiKey ? "Đã có" : "Chưa có"}</p>
+                  <p className="mb-3">Key hiện tại: {providerSettings.chayApiKeyMasked || "Chưa cấu hình"}</p>
+                  <input value={chayApiKey} onChange={e => setChayApiKey(e.target.value)} className="w-full border rounded-2xl px-5 py-4" placeholder="Dán API key chaycodeso3 mới vào đây, để trống nếu không đổi" />
+                </div>
+
+                <div className="border rounded-3xl p-5">
+                  <h2 className="text-2xl font-black mb-2">CodeSim</h2>
+                  <p className="text-sm text-slate-500 mb-3">Nguồn API mới thêm vào hệ thống.</p>
+                  <label className="flex gap-2 items-center mb-3">
+                    <input type="checkbox" checked={providerSettings.codesimEnabled} onChange={e => setProviderSettings({ ...providerSettings, codesimEnabled: e.target.checked })} />
+                    Bật nguồn này
+                  </label>
+                  <p>Trạng thái key: {providerSettings.hasCodesimApiKey ? "Đã có" : "Chưa có"}</p>
+                  <p className="mb-3">Key hiện tại: {providerSettings.codesimApiKeyMasked || "Chưa cấu hình"}</p>
+                  <input value={codesimApiKey} onChange={e => setCodesimApiKey(e.target.value)} className="w-full border rounded-2xl px-5 py-4" placeholder="Dán API key CodeSim mới vào đây, để trống nếu không đổi" />
+                </div>
+              </div>
+
+              <div className="flex gap-2 mt-5 flex-wrap">
+                <button disabled={busy} onClick={saveProviderSettings} className="bg-indigo-600 disabled:bg-slate-400 text-white rounded-2xl px-6 py-4 font-black">Lưu cấu hình API</button>
+                <button onClick={testProvider} className="bg-slate-900 text-white rounded-2xl px-6 py-4 font-black">Test cả 2 API</button>
+              </div>
+
+              {providerTest && <pre className="mt-5 bg-slate-100 rounded-2xl p-4 overflow-x-auto text-xs">{JSON.stringify(providerTest, null, 2)}</pre>}
+            </Panel>
+          )}
+
+          {tab === "settings" && isAdmin && (
+            <Panel title="Cài đặt giao diện">
+              <div className="grid gap-4">
+                <input value={settings.siteName} onChange={e => setSettings({ ...settings, siteName: e.target.value })} className="w-full border rounded-2xl px-5 py-4" placeholder="Tên web" />
+                <input value={settings.logoText} onChange={e => setSettings({ ...settings, logoText: e.target.value })} className="w-full border rounded-2xl px-5 py-4" placeholder="Logo text nếu chưa upload ảnh" />
+
+                <div className="border rounded-2xl p-4">
+                  <p className="font-bold mb-2">Ảnh logo web</p>
+                  {settings.logoImage && <img src={settings.logoImage} className="w-24 h-24 rounded-2xl object-cover mb-3" />}
+                  <input type="file" accept="image/*" onChange={e => { const file = e.target.files?.[0]; if (file) imageToBase64(file, value => setSettings({ ...settings, logoImage: value })); }} className="w-full border rounded-2xl px-5 py-4" />
+                  {settings.logoImage && <button type="button" onClick={() => setSettings({ ...settings, logoImage: "" })} className="mt-3 bg-rose-600 text-white rounded-xl px-4 py-2 font-bold">Xóa ảnh logo</button>}
+                </div>
+
+                <select value={settings.background} onChange={e => setSettings({ ...settings, background: e.target.value })} className="w-full border rounded-2xl px-5 py-4">
+                  <option value="bg-slate-950">Nền đen</option>
+                  <option value="bg-violet-950">Nền tím</option>
+                  <option value="bg-blue-950">Nền xanh</option>
+                  <option value="bg-emerald-950">Nền xanh lá</option>
+                </select>
+
+                <textarea value={settings.announcement} onChange={e => setSettings({ ...settings, announcement: e.target.value })} className="w-full border rounded-2xl px-5 py-4 min-h-28" placeholder="Thông báo admin" />
+                <input value={settings.bannerImage} onChange={e => setSettings({ ...settings, bannerImage: e.target.value })} className="w-full border rounded-2xl px-5 py-4" placeholder="Link ảnh banner" />
+
+                <div className="pt-4 border-t">
+                  <h2 className="text-2xl font-black mb-4">Thông tin nạp tiền</h2>
+                  <input value={settings.bankName || ""} onChange={e => setSettings({ ...settings, bankName: e.target.value })} className="w-full border rounded-2xl px-5 py-4 mb-3" placeholder="Tên ngân hàng" />
+                  <input value={settings.bankAccountNumber || ""} onChange={e => setSettings({ ...settings, bankAccountNumber: e.target.value })} className="w-full border rounded-2xl px-5 py-4 mb-3" placeholder="Số tài khoản" />
+                  <input value={settings.bankBeneficiary || ""} onChange={e => setSettings({ ...settings, bankBeneficiary: e.target.value })} className="w-full border rounded-2xl px-5 py-4 mb-3" placeholder="Chủ tài khoản" />
+                  <input value={settings.bankQrUrl || ""} onChange={e => setSettings({ ...settings, bankQrUrl: e.target.value })} className="w-full border rounded-2xl px-5 py-4 mb-3" placeholder="Link ảnh QR hoặc ảnh đã tải lên" />
+
+                  <div className="border rounded-2xl p-4 mb-3">
+                    <p className="font-bold mb-2">Tải ảnh QR nạp tiền</p>
+                    {settings.bankQrUrl && <img src={settings.bankQrUrl} className="w-48 rounded-2xl object-cover mb-3 border" />}
+                    <input type="file" accept="image/*" onChange={e => { const file = e.target.files?.[0]; if (file) imageToBase64(file, value => setSettings({ ...settings, bankQrUrl: value })); }} className="w-full border rounded-2xl px-5 py-4" />
+                    {settings.bankQrUrl && <button type="button" onClick={() => setSettings({ ...settings, bankQrUrl: "" })} className="mt-3 bg-rose-600 text-white rounded-xl px-4 py-2 font-bold">Xóa ảnh QR</button>}
+                  </div>
+
+                  <textarea value={settings.topupNote || ""} onChange={e => setSettings({ ...settings, topupNote: e.target.value })} className="w-full border rounded-2xl px-5 py-4 min-h-28" placeholder="Ghi chú nạp tiền" />
+                </div>
+
+                <button disabled={busy} onClick={saveSettings} className="bg-indigo-600 disabled:bg-slate-400 text-white rounded-2xl px-6 py-4 font-black w-fit">Lưu cài đặt</button>
+              </div>
+            </Panel>
+          )}
+        </main>
+      </div>
+    </div>
   );
 }
 
-async function requireAdmin(req, res, next) {
-  try {
-    const data = await readData();
-    const user = data.users.find(u => u.id === req.headers["x-user-id"] && u.role === "admin");
-
-    if (!user) {
-      return res.status(403).json({ message: "Bạn không có quyền admin" });
-    }
-
-    req.data = data;
-    req.admin = user;
-    next();
-  } catch (error) {
-    res.status(500).json({ message: error.message || "Lỗi server" });
-  }
+function Toast({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-slate-950 text-white rounded-2xl px-5 py-3 shadow font-bold max-w-[90vw] text-center">
+      {children}
+    </div>
+  );
 }
 
-async function getJson(url, timeoutMs = HTTP_TIMEOUT_MS) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      method: "GET",
-      signal: controller.signal,
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        "User-Agent": "Mozilla/5.0 OTP24H",
-      },
-    });
-
-    const text = await response.text();
-    let data;
-
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = {
-        error: true,
-        httpStatus: response.status,
-        contentType: response.headers.get("content-type"),
-        message: "API trả về dữ liệu không hợp lệ",
-        rawPreview: text.slice(0, 500),
-      };
-    }
-
-    if (!response.ok && !data.httpStatus) {
-      data.httpStatus = response.status;
-    }
-
-    return data;
-  } catch (error) {
-    if (error.name === "AbortError") {
-      return { error: true, timeout: true, message: "API nguồn phản hồi quá lâu" };
-    }
-    return { error: true, message: error.message || "Không gọi được API nguồn" };
-  } finally {
-    clearTimeout(timer);
-  }
+function Nav({ label, id, tab, setTab }: { label: string; id: string; tab: string; setTab: (id: string) => void }) {
+  return (
+    <button onClick={() => setTab(id)} className={`w-full rounded-2xl px-4 py-3 text-left font-bold mb-2 ${tab === id ? "bg-indigo-600" : "bg-slate-800"}`}>
+      {label}
+    </button>
+  );
 }
 
-async function callChay(data, params) {
-  const apiKey = getChayKey(data);
-  if (!apiKey) {
-    return { ResponseCode: 400, Msg: "Chưa cấu hình chaycodeso3 API key", Result: null };
-  }
-
-  const url = new URL(CHAY_API_BASE);
-  url.searchParams.set("apik", apiKey);
-
-  Object.entries(params || {}).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "") {
-      url.searchParams.set(key, String(value));
-    }
-  });
-
-  return getJson(url);
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="bg-white rounded-3xl p-5 md:p-6 shadow mb-6">
+      <h1 className="text-2xl md:text-3xl font-black mb-5">{title}</h1>
+      {children}
+    </div>
+  );
 }
 
-async function callCodesim(data, pathName, params = {}) {
-  const apiKey = getCodesimKey(data);
-  if (!apiKey) {
-    return { status: 400, message: "Chưa cấu hình CodeSim API key", data: null };
-  }
-
-  const url = new URL(CODESIM_API_BASE + pathName);
-  url.searchParams.set("api_key", apiKey);
-
-  Object.entries(params || {}).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "") {
-      url.searchParams.set(key, String(value));
-    }
-  });
-
-  return getJson(url);
+function Stat({ title, value }: { title: string; value: React.ReactNode }) {
+  return (
+    <div className="bg-slate-100 rounded-2xl p-4">
+      <b>{title}</b>
+      <p className="text-2xl font-black">{value}</p>
+    </div>
+  );
 }
 
-function isChayOk(api) {
-  return api && Number(api.ResponseCode) === 0;
+function TopupBox({ topup }: { topup: Topup }) {
+  return (
+    <div className="border rounded-2xl p-4">
+      <h3 className="font-black">{money(topup.amount)}</h3>
+      <p className="text-sm text-slate-500">Trạng thái: {topup.status} | {new Date(topup.createdAt).toLocaleString("vi-VN")}</p>
+      {topup.note && <p className="mt-2 bg-slate-50 rounded-xl p-3">{topup.note}</p>}
+    </div>
+  );
 }
 
-function isCodesimOk(api) {
-  return api && Number(api.status) === 200;
+function OrderBox({ order, isAdmin, users = [], onCheck, onReuse }: { order: Order; isAdmin: boolean; users?: User[]; onCheck: (order: Order) => void; onReuse: (order: Order) => void }) {
+  const orderUser = users.find(u => u.id === order.userId);
+
+  return (
+    <div className="border rounded-2xl p-4 bg-white">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <h3 className="font-black text-xl">{order.appName} - {order.number}</h3>
+          <p className="text-sm text-slate-500">
+            {isAdmin && <>User: {orderUser?.username || order.userId || "Không rõ"} | Nguồn: {order.provider || "api"} | </>}
+            Nhà mạng: {order.carrier || "Tất cả"} | Trạng thái: {order.status} | Giá: {money(order.price)}
+          </p>
+          <p className="text-xs text-slate-400">{new Date(order.createdAt).toLocaleString("vi-VN")}</p>
+        </div>
+
+        <div className="flex gap-2 flex-wrap">
+          {order.status === "waiting" && <button onClick={() => onCheck(order)} className="bg-indigo-600 text-white rounded-xl px-4 py-2 font-bold">Check OTP</button>}
+          {order.provider === "codesim" && order.status === "done" && <button onClick={() => onReuse(order)} className="bg-emerald-600 text-white rounded-xl px-4 py-2 font-bold">Thuê lại</button>}
+        </div>
+      </div>
+
+      {order.refunded && (
+        <p className="mt-3 text-emerald-700 font-bold">
+          Đã hoàn tiền: {order.refundReason === "expired_no_otp" ? "Hết hạn không có OTP" : "Khách hủy"}
+        </p>
+      )}
+
+      {order.code ? (
+        <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+          <b>OTP: {order.code}</b>
+        </div>
+      ) : (
+        order.status === "waiting" && <p className="mt-3 text-slate-500">Đang tự động chờ OTP...</p>
+      )}
+
+      {order.sms && <pre className="mt-3 bg-slate-100 rounded-xl p-3 whitespace-pre-wrap text-sm overflow-x-auto">{order.sms}</pre>}
+    </div>
+  );
 }
 
-function serviceFromChay(raw) {
-  return {
-    id: "chay-" + normalizeName(raw.Name || raw.Id),
-    sourceKey: `chaycodeso3:${raw.Id}`,
-    provider: "chaycodeso3",
-    providerId: raw.Id,
-    originalName: raw.Name,
-    name: raw.Name,
-    providerCost: Number(raw.Cost || 0),
-    price: Number(raw.Cost || 0),
-    hidden: true,
-  };
+function AdminServiceBox({ service, onSave }: { service: Service; onSave: (service: Service, patch: Partial<Service>) => void }) {
+  const [name, setName] = useState(service.name || "");
+  const [price, setPrice] = useState(String(service.price || 0));
+  const [note, setNote] = useState(service.note || "");
+
+  useEffect(() => {
+    setName(service.name || "");
+    setPrice(String(service.price || 0));
+    setNote(service.note || "");
+  }, [service]);
+
+  return (
+    <div className="border rounded-2xl p-4">
+      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+        <div>
+          <h3 className="font-black text-lg">{service.originalName || service.name}</h3>
+          <p className="text-sm text-slate-500">
+            Nguồn {service.provider} | ID {service.providerId} | API {money(service.providerCost)}
+          </p>
+          <p className={`font-bold mt-1 ${service.hidden ? "text-rose-600" : "text-emerald-600"}`}>{service.hidden ? "Đang ẩn" : "Đang hiện"}</p>
+        </div>
+
+        <button onClick={() => onSave(service, { hidden: !service.hidden })} className={`${service.hidden ? "bg-emerald-600" : "bg-rose-600"} text-white rounded-xl px-4 py-2 font-bold`}>
+          {service.hidden ? "Bỏ ẩn" : "Ẩn"}
+        </button>
+      </div>
+
+      <div className="grid md:grid-cols-[1fr_140px_1fr_auto] gap-2 mt-4">
+        <input value={name} onChange={e => setName(e.target.value)} onBlur={() => name !== service.name && onSave(service, { name })} className="border rounded-xl px-3 py-2" placeholder="Tên hiển thị" />
+        <input value={price} onChange={e => setPrice(e.target.value)} onBlur={() => Number(price) !== Number(service.price) && onSave(service, { price: Number(price) })} className="border rounded-xl px-3 py-2" placeholder="Giá bán" inputMode="numeric" />
+        <input value={note} onChange={e => setNote(e.target.value)} onBlur={() => note !== (service.note || "") && onSave(service, { note })} className="border rounded-xl px-3 py-2" placeholder="Chú thích" />
+        <label className="flex items-center gap-2 px-3 py-2">
+          <input type="checkbox" checked={service.hidden} onChange={e => onSave(service, { hidden: e.target.checked })} />
+          Ẩn
+        </label>
+      </div>
+    </div>
+  );
 }
-
-function serviceFromCodesim(raw) {
-  return {
-    id: `codesim-${raw.id}`,
-    sourceKey: `codesim:${raw.id}`,
-    provider: "codesim",
-    providerId: raw.id,
-    originalName: raw.name,
-    name: raw.name,
-    providerCost: Number(raw.price || 0),
-    price: Number(raw.price || 0),
-    hidden: true,
-  };
-}
-
-function applyOverride(source, overrides = {}) {
-  const custom = overrides[source.sourceKey] || {};
-  return {
-    ...source,
-    name: custom.name || source.originalName,
-    price: custom.price !== undefined ? Number(custom.price) : source.providerCost,
-    hidden: custom.hidden !== undefined ? Boolean(custom.hidden) : true,
-    note: custom.note || "",
-  };
-}
-
-async function getChayServices(data) {
-  if (!data.providerSettings?.chayEnabled) return { services: [], error: null };
-  const api = await callChay(data, { act: "app" });
-  if (!isChayOk(api)) return { services: [], error: api };
-  return { services: (api.Result || []).map(serviceFromChay), error: null };
-}
-
-async function getCodesimServices(data) {
-  if (!data.providerSettings?.codesimEnabled) return { services: [], error: null };
-  const api = await callCodesim(data, "/service/get_service_by_api_key");
-  if (!isCodesimOk(api)) return { services: [], error: api };
-  return { services: (api.data || []).map(serviceFromCodesim), error: null };
-}
-
-async function getAllServices(data, force = false) {
-  const key = serviceCacheKey(data);
-
-  if (!force && serviceCache.value && serviceCache.key === key && Date.now() < serviceCache.expiresAt) {
-    return serviceCache.value;
-  }
-
-  const [chay, codesim] = await Promise.all([getChayServices(data), getCodesimServices(data)]);
-  const value = {
-    services: [...(chay.services || []), ...(codesim.services || [])],
-    errors: [
-      chay.error ? { provider: "chaycodeso3", error: chay.error } : null,
-      codesim.error ? { provider: "codesim", error: codesim.error } : null,
-    ].filter(Boolean),
-  };
-
-  serviceCache = {
-    key,
-    expiresAt: Date.now() + SERVICE_CACHE_MS,
-    value,
-  };
-
-  return value;
-}
-
-function findUser(data, userId) {
-  return data.users.find(u => u.id === userId);
-}
-
-app.get("/health", async (req, res) => {
-  res.status(200).json({ ok: true, service: "otp24h", time: nowIso() });
-});
-
-app.get("/api/db-status", async (req, res) => {
-  try {
-    await getCollection();
-    res.json({ ok: true, db: DB_NAME });
-  } catch (error) {
-    res.status(500).json({ ok: false, message: error.message });
-  }
-});
-
-app.get("/api/source-status", async (req, res) => {
-  const data = await readData();
-  const { services, errors } = await getAllServices(data);
-  const all = services.map(s => applyOverride(s, data.serviceOverrides));
-
-  res.json({
-    ok: !errors.length,
-    errors,
-    total: all.length,
-    visible: all.filter(s => !s.hidden).length,
-    hidden: all.filter(s => s.hidden).length,
-    cache: {
-      active: !!serviceCache.value,
-      expiresAt: serviceCache.expiresAt,
-    },
-  });
-});
-
-app.get("/api/settings", async (req, res) => {
-  res.json((await readData()).settings);
-});
-
-app.put("/api/settings", requireAdmin, async (req, res) => {
-  const data = req.data;
-  data.settings = { ...data.settings, ...req.body };
-  await writeData(data);
-  res.json(data.settings);
-});
-
-app.get("/api/admin/provider-settings", requireAdmin, async (req, res) => {
-  const data = req.data;
-  res.json({
-    chayEnabled: !!data.providerSettings?.chayEnabled,
-    chayApiKeyMasked: maskKey(getChayKey(data)),
-    hasChayApiKey: !!getChayKey(data),
-    codesimEnabled: !!data.providerSettings?.codesimEnabled,
-    codesimApiKeyMasked: maskKey(getCodesimKey(data)),
-    hasCodesimApiKey: !!getCodesimKey(data),
-  });
-});
-
-app.put("/api/admin/provider-settings", requireAdmin, async (req, res) => {
-  const data = req.data;
-
-  data.providerSettings = {
-    ...(data.providerSettings || {}),
-    chayEnabled: req.body.chayEnabled !== undefined ? Boolean(req.body.chayEnabled) : !!data.providerSettings?.chayEnabled,
-    codesimEnabled: req.body.codesimEnabled !== undefined ? Boolean(req.body.codesimEnabled) : !!data.providerSettings?.codesimEnabled,
-  };
-
-  if (req.body.chayApiKey !== undefined && String(req.body.chayApiKey).trim()) {
-    data.providerSettings.chayApiKey = String(req.body.chayApiKey).trim();
-  }
-
-  if (req.body.codesimApiKey !== undefined && String(req.body.codesimApiKey).trim()) {
-    data.providerSettings.codesimApiKey = String(req.body.codesimApiKey).trim();
-  }
-
-  clearServiceCache();
-  await writeData(data);
-
-  res.json({
-    chayEnabled: !!data.providerSettings.chayEnabled,
-    chayApiKeyMasked: maskKey(data.providerSettings.chayApiKey),
-    hasChayApiKey: !!data.providerSettings.chayApiKey,
-    codesimEnabled: !!data.providerSettings.codesimEnabled,
-    codesimApiKeyMasked: maskKey(data.providerSettings.codesimApiKey),
-    hasCodesimApiKey: !!data.providerSettings.codesimApiKey,
-  });
-});
-
-app.get("/api/admin/provider-test", requireAdmin, async (req, res) => {
-  const data = req.data;
-  const [chay, codesim] = await Promise.all([
-    callChay(data, { act: "account" }),
-    callCodesim(data, "/yourself/information-by-api-key"),
-  ]);
-
-  res.json({
-    ok: isChayOk(chay) && isCodesimOk(codesim),
-    chaycodeso3: { ok: isChayOk(chay), data: chay },
-    codesim: { ok: isCodesimOk(codesim), data: codesim },
-  });
-});
-
-app.post("/api/register", async (req, res) => {
-  const { username, password } = req.body;
-  const cleanUsername = String(username || "").trim();
-
-  if (!cleanUsername || !password) {
-    return res.status(400).json({ message: "Thiếu tài khoản hoặc mật khẩu" });
-  }
-
-  const data = await readData();
-  if (data.users.find(u => u.username.toLowerCase() === cleanUsername.toLowerCase())) {
-    return res.status(409).json({ message: "Tài khoản đã tồn tại" });
-  }
-
-  const user = {
-    id: makeId("u"),
-    username: cleanUsername,
-    password: String(password),
-    role: "user",
-    balance: 0,
-    createdAt: nowIso(),
-    registerIp: getClientIp(req),
-  };
-
-  data.users.push(user);
-  await writeData(data);
-  res.json(publicUser(user));
-});
-
-app.post("/api/login", async (req, res) => {
-  const { username, password } = req.body;
-  const cleanUsername = String(username || "").trim().toLowerCase();
-  const cleanPassword = String(password || "");
-
-  if (!cleanUsername || !cleanPassword) {
-    return res.status(400).json({ message: "Thiếu tài khoản hoặc mật khẩu" });
-  }
-
-  const data = await readData();
-  const user = data.users.find(u => u.username.toLowerCase() === cleanUsername && u.password === cleanPassword);
-
-  if (!user) {
-    return res.status(401).json({ message: "Sai tài khoản hoặc mật khẩu" });
-  }
-
-  res.json(publicUser(user));
-});
-
-app.post("/api/change-password", async (req, res) => {
-  const { userId, oldPassword, newPassword } = req.body;
-  const data = await readData();
-  const user = findUser(data, userId);
-
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
-  if (user.password !== oldPassword) return res.status(400).json({ message: "Mật khẩu cũ không đúng" });
-  if (!newPassword) return res.status(400).json({ message: "Thiếu mật khẩu mới" });
-
-  user.password = String(newPassword);
-  await writeData(data);
-  res.json({ message: "Đổi mật khẩu thành công" });
-});
-
-app.get("/api/me", async (req, res) => {
-  const data = await readData();
-  const user = findUser(data, req.query.userId);
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
-  res.json(publicUser(user));
-});
-
-app.get("/api/users", requireAdmin, async (req, res) => {
-  res.json(req.data.users.map(publicUser));
-});
-
-app.get("/api/user-stats", requireAdmin, async (req, res) => {
-  const data = req.data;
-  const stats = data.users.map(user => {
-    const approvedTopups = data.topups.filter(t => t.userId === user.id && t.status === "approved");
-    const usedOrders = data.orders.filter(o => o.userId === user.id && o.status !== "canceled" && !(o.status === "expired" && o.refunded));
-
-    return {
-      ...publicUser(user),
-      totalTopup: approvedTopups.reduce((sum, t) => sum + Number(t.amount || 0), 0),
-      totalUsed: usedOrders.reduce((sum, o) => sum + Number(o.price || 0), 0),
-      balance: Number(user.balance || 0),
-    };
-  });
-
-  res.json(stats);
-});
-
-app.post("/api/users/:id/adjust-balance", requireAdmin, async (req, res) => {
-  const data = req.data;
-  const user = findUser(data, req.params.id);
-  const amount = Number(req.body.amount || 0);
-
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
-  if (Number.isNaN(amount)) return res.status(400).json({ message: "Số tiền không hợp lệ" });
-
-  user.balance = Math.max(0, Number(user.balance || 0) + amount);
-  await writeData(data);
-  res.json(publicUser(user));
-});
-
-app.put("/api/users/:id", requireAdmin, async (req, res) => {
-  const data = req.data;
-  const user = findUser(data, req.params.id);
-
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
-
-  if (req.body.password) user.password = String(req.body.password);
-  if (req.body.balance !== undefined) user.balance = Math.max(0, Number(req.body.balance));
-
-  await writeData(data);
-  res.json(publicUser(user));
-});
-
-app.delete("/api/users/:id", requireAdmin, async (req, res) => {
-  const data = req.data;
-  const user = findUser(data, req.params.id);
-
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
-  if (user.role === "admin") return res.status(400).json({ message: "Không thể xóa admin" });
-
-  data.users = data.users.filter(u => u.id !== req.params.id);
-  await writeData(data);
-  res.json({ success: true });
-});
-
-app.get("/api/provider/account", requireAdmin, async (req, res) => {
-  const data = req.data;
-  const [chaycodeso3, codesim] = await Promise.all([
-    callChay(data, { act: "account" }),
-    callCodesim(data, "/yourself/information-by-api-key"),
-  ]);
-
-  res.json({ chaycodeso3, codesim });
-});
-
-app.get("/api/services", async (req, res) => {
-  const data = await readData();
-  const { services, errors } = await getAllServices(data);
-  const decorated = services
-    .map(s => applyOverride(s, data.serviceOverrides))
-    .filter(s => !s.hidden)
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  if (decorated.length === 0 && errors.length) {
-    return res.status(502).json({ message: "Không tải được dịch vụ từ API nguồn", errors });
-  }
-
-  res.json(decorated);
-});
-
-app.get("/api/admin/services", requireAdmin, async (req, res) => {
-  const data = req.data;
-  const force = req.query.force === "1";
-  const { services, errors } = await getAllServices(data, force);
-  const decorated = services.map(s => applyOverride(s, data.serviceOverrides)).sort((a, b) => a.name.localeCompare(b.name));
-
-  res.json({
-    sources: decorated,
-    errors,
-    counts: {
-      chaycodeso3: decorated.filter(s => s.provider === "chaycodeso3").length,
-      codesim: decorated.filter(s => s.provider === "codesim").length,
-      visible: decorated.filter(s => !s.hidden).length,
-      hidden: decorated.filter(s => s.hidden).length,
-      total: decorated.length,
-    },
-  });
-});
-
-app.put("/api/admin/services/:id", requireAdmin, async (req, res) => {
-  const data = req.data;
-  const id = String(req.params.id);
-
-  data.serviceOverrides[id] = {
-    ...(data.serviceOverrides[id] || {}),
-    ...req.body,
-  };
-
-  await writeData(data);
-  res.json(data.serviceOverrides[id]);
-});
-
-app.post("/api/orders", async (req, res) => {
-  const { userId, appId, carrier, prefix, sendsms, number, networkId } = req.body;
-  const data = await readData();
-  const user = findUser(data, userId);
-
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
-
-  const { services, errors } = await getAllServices(data);
-  const service = services
-    .map(s => applyOverride(s, data.serviceOverrides))
-    .find(s => String(s.sourceKey) === String(appId) || String(s.id) === String(appId));
-
-  if (!service) return res.status(404).json({ message: "Dịch vụ không tồn tại", errors });
-  if (service.hidden) return res.status(400).json({ message: "Dịch vụ đang bị ẩn" });
-  if (Number(user.balance || 0) < Number(service.price || 0)) {
-    return res.status(400).json({ message: "Số dư user không đủ" });
-  }
-
-  let api;
-  let order;
-
-  if (service.provider === "codesim") {
-    api = await callCodesim(data, "/sim/get_sim", {
-      service_id: service.providerId,
-      network_id: networkId,
-      phone: prefix || number,
-    });
-
-    if (!isCodesimOk(api) || !api.data?.phone) {
-      return res.status(400).json({ message: api.message || "Không lấy được số CodeSim", api });
-    }
-
-    user.balance = Number(user.balance || 0) - Number(service.price || 0);
-    order = {
-      id: makeId("o"),
-      provider: "codesim",
-      sourceKey: service.sourceKey,
-      providerQueueId: api.data.otpId,
-      providerSimId: api.data.simId,
-      userId,
-      appId: String(service.sourceKey),
-      providerServiceId: service.providerId,
-      appName: service.name,
-      carrier: carrier || "CodeSim",
-      number: api.data.phone,
-      providerCost: Number(api.data.payment || service.providerCost),
-      price: service.price,
-      status: "waiting",
-      code: "",
-      sms: "",
-      refunded: false,
-      createdAt: nowIso(),
-    };
-  } else {
-    api = await callChay(data, {
-      act: "number",
-      appId: service.providerId,
-      carrier,
-      prefix,
-      sendsms: sendsms ? 1 : undefined,
-      number,
-    });
-
-    if (!isChayOk(api)) {
-      return res.status(400).json({ message: api.Msg || "Không lấy được số", api });
-    }
-
-    user.balance = Number(user.balance || 0) - Number(service.price || 0);
-    order = {
-      id: makeId("o"),
-      provider: "chaycodeso3",
-      sourceKey: service.sourceKey,
-      providerQueueId: api.Result.Id,
-      providerSimId: api.Result.Id,
-      userId,
-      appId: String(service.sourceKey),
-      providerServiceId: service.providerId,
-      appName: service.name,
-      carrier: carrier || "Tất cả",
-      number: api.Result.Number,
-      providerCost: Number(api.Result.Cost || service.providerCost),
-      price: service.price,
-      status: "waiting",
-      code: "",
-      sms: "",
-      refunded: false,
-      createdAt: nowIso(),
-    };
-  }
-
-  data.orders.unshift(order);
-  await writeData(data);
-  res.json({ order, user: publicUser(user), api });
-});
-
-app.get("/api/orders", async (req, res) => {
-  const data = await readData();
-  const user = findUser(data, req.query.userId);
-
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
-
-  const list = user.role === "admin" ? data.orders : data.orders.filter(o => o.userId === user.id);
-  res.json(list.slice(0, 300));
-});
-
-app.post("/api/orders/:id/check-code", async (req, res) => {
-  const data = await readData();
-  const order = data.orders.find(o => o.id === req.params.id);
-
-  if (!order) return res.status(404).json({ message: "Không tìm thấy order" });
-
-  if (order.status !== "waiting") {
-    return res.json({ order, api: { message: "Order không còn chờ OTP" }, user: null });
-  }
-
-  let api;
-  let updatedUser = null;
-
-  if (order.provider === "codesim") {
-    api = await callCodesim(data, "/otp/get_otp_by_phone_api_key", {
-      otp_id: order.providerQueueId,
-    });
-
-    if (isCodesimOk(api) && api.data?.code) {
-      order.status = "done";
-      order.code = api.data.code || "";
-      order.sms = api.data.content || "";
-      order.senderName = api.data.senderName || "";
-    }
-  } else {
-    api = await callChay(data, { act: "code", id: order.providerQueueId });
-
-    if (api.ResponseCode === 0) {
-      order.status = "done";
-      order.code = api.Result?.Code || "";
-      order.sms = api.Result?.SMS || "";
-      order.callFile = api.Result?.CallFile || "";
-    } else if (api.ResponseCode === 2) {
-      order.status = "expired";
-
-      if (!order.refunded) {
-        const user = findUser(data, order.userId);
-        if (user) {
-          user.balance = Number(user.balance || 0) + Number(order.price || 0);
-          updatedUser = publicUser(user);
-        }
-
-        order.refunded = true;
-        order.refundedAt = nowIso();
-        order.refundReason = "expired_no_otp";
-      }
-    }
-  }
-
-  order.lastCheckedAt = nowIso();
-  await writeData(data);
-  res.json({ order, api, user: updatedUser });
-});
-
-app.post("/api/orders/:id/cancel", async (req, res) => {
-  const data = await readData();
-  const order = data.orders.find(o => o.id === req.params.id);
-
-  if (!order) return res.status(404).json({ message: "Không tìm thấy order" });
-  if (order.status !== "waiting") return res.status(400).json({ message: "Order không còn trạng thái chờ" });
-
-  let api;
-  let ok = false;
-  let updatedUser = null;
-
-  if (order.provider === "codesim") {
-    api = await callCodesim(data, `/sim/cancel_api_key/${order.providerSimId}`);
-    ok = isCodesimOk(api);
-  } else {
-    api = await callChay(data, { act: "expired", id: order.providerQueueId });
-    ok = api.ResponseCode === 0;
-  }
-
-  if (ok) {
-    if (!order.refunded) {
-      const user = findUser(data, order.userId);
-      if (user) {
-        user.balance = Number(user.balance || 0) + Number(order.price || 0);
-        updatedUser = publicUser(user);
-      }
-
-      order.refunded = true;
-      order.refundedAt = nowIso();
-      order.refundReason = "user_cancel";
-    }
-
-    order.status = "canceled";
-  }
-
-  await writeData(data);
-  res.json({ order, api, user: updatedUser });
-});
-
-app.post("/api/orders/:id/reuse", async (req, res) => {
-  const data = await readData();
-  const order = data.orders.find(o => o.id === req.params.id);
-
-  if (!order) return res.status(404).json({ message: "Không tìm thấy order" });
-  if (order.provider !== "codesim") return res.status(400).json({ message: "Thuê lại chỉ hỗ trợ CodeSim" });
-  if (order.status !== "done") return res.status(400).json({ message: "Chỉ thuê lại số đã lấy code thành công" });
-
-  const user = findUser(data, order.userId);
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
-  if (Number(user.balance || 0) < Number(order.price || 0)) {
-    return res.status(400).json({ message: "Số dư user không đủ" });
-  }
-
-  const api = await callCodesim(data, "/sim/reuse_by_phone_api_key", {
-    phone: order.number,
-    service_id: order.providerServiceId,
-  });
-
-  if (!isCodesimOk(api) || !api.data?.phone) {
-    return res.status(400).json({ message: api.message || "Không thuê lại được số", api });
-  }
-
-  user.balance = Number(user.balance || 0) - Number(order.price || 0);
-
-  const newOrder = {
-    id: makeId("o"),
-    provider: "codesim",
-    sourceKey: order.sourceKey,
-    providerQueueId: api.data.otpId,
-    providerSimId: api.data.simId,
-    userId: user.id,
-    appId: order.appId,
-    providerServiceId: order.providerServiceId,
-    appName: order.appName,
-    carrier: "CodeSim",
-    number: api.data.phone,
-    providerCost: Number(api.data.payment || order.providerCost),
-    price: order.price,
-    status: "waiting",
-    code: "",
-    sms: "",
-    refunded: false,
-    reusedFrom: order.id,
-    createdAt: nowIso(),
-  };
-
-  data.orders.unshift(newOrder);
-  await writeData(data);
-  res.json({ order: newOrder, user: publicUser(user), api });
-});
-
-app.post("/api/topups", async (req, res) => {
-  const { userId, amount, note } = req.body;
-  const data = await readData();
-  const user = findUser(data, userId);
-  const money = Number(amount || 0);
-
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
-  if (!money || Number.isNaN(money) || money <= 0) {
-    return res.status(400).json({ message: "Số tiền nạp không hợp lệ" });
-  }
-
-  const topup = {
-    id: makeId("t"),
-    userId,
-    username: user.username,
-    amount: money,
-    note: note || "",
-    status: "pending",
-    createdAt: nowIso(),
-  };
-
-  data.topups.unshift(topup);
-  await writeData(data);
-  res.json(topup);
-});
-
-app.get("/api/topups", async (req, res) => {
-  const data = await readData();
-  const user = findUser(data, req.query.userId);
-
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
-
-  res.json(user.role === "admin" ? data.topups : data.topups.filter(t => t.userId === user.id));
-});
-
-app.post("/api/topups/:id/approve", requireAdmin, async (req, res) => {
-  const data = req.data;
-  const topup = data.topups.find(t => t.id === req.params.id);
-
-  if (!topup) return res.status(404).json({ message: "Không tìm thấy yêu cầu nạp" });
-  if (topup.status !== "pending") return res.status(400).json({ message: "Yêu cầu này đã xử lý rồi" });
-
-  const user = findUser(data, topup.userId);
-  if (!user) return res.status(404).json({ message: "Không tìm thấy user" });
-
-  user.balance = Number(user.balance || 0) + Number(topup.amount || 0);
-  topup.status = "approved";
-  topup.approvedAt = nowIso();
-  topup.approvedBy = req.admin.username;
-
-  await writeData(data);
-  res.json({ topup, user: publicUser(user) });
-});
-
-app.post("/api/topups/:id/reject", requireAdmin, async (req, res) => {
-  const data = req.data;
-  const topup = data.topups.find(t => t.id === req.params.id);
-
-  if (!topup) return res.status(404).json({ message: "Không tìm thấy yêu cầu nạp" });
-  if (topup.status !== "pending") return res.status(400).json({ message: "Yêu cầu này đã xử lý rồi" });
-
-  topup.status = "rejected";
-  topup.rejectedAt = nowIso();
-  topup.rejectedBy = req.admin.username;
-  topup.rejectReason = req.body.reason || "";
-
-  await writeData(data);
-  res.json(topup);
-});
-
-app.use((error, req, res, next) => {
-  console.error(error);
-  res.status(500).json({ message: error.message || "Lỗi server" });
-});
-
-const distPath = path.resolve("dist");
-app.use(express.static(distPath, { maxAge: "1h", etag: true }));
-
-app.get(/.*/, (req, res) => {
-  res.sendFile(path.join(distPath, "index.html"));
-});
-
-app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
-});
