@@ -150,4 +150,7 @@ app.use((error, req, res, next) => { console.error(error); res.status(500).json(
 const distPath = path.resolve("dist");
 app.use(express.static(distPath, { maxAge: "1h", etag: true }));
 app.get(/.*/, (req, res) => res.sendFile(path.join(distPath, "index.html")));
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true });
+});
 app.listen(PORT, () => console.log("Server running on port " + PORT));
