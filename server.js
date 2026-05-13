@@ -1,156 +1,569 @@
-import express from "express";
-import cors from "cors";
-import path from "path";
-import { MongoClient } from "mongodb";
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const fs = require('fs');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const multer = require('multer');
+const { MongoClient } = require('mongodb');
+const { v2: cloudinary } = require('cloudinary');
 
 const app = express();
-const PORT = process.env.PORT || 10000;
-const MONGODB_URI = process.env.MONGODB_URI;
-const DB_NAME = process.env.MONGODB_DB || "otp24h";
-const DATA_COLLECTION = "appdata";
-const CHAY_API_BASE = "https://chaycodeso3.com/api";
-const CODESIM_API_BASE = "https://apisim.codesim.net";
-const HTTP_TIMEOUT_MS = 30000;
-const SERVICE_CACHE_MS = 1000 * 60 * 5;
-let mongoClient;
-let mongoCollection;
-let serviceCache = { key: "", expiresAt: 0, value: null };
+const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'change-this-secret';
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'hungnbyt';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'azhung12';
+const MONGODB_URI = String(process.env.MONGODB_URI || '').trim();
+const MONGODB_DB = String(process.env.MONGODB_DB || 'coalldichvu').trim();
+const CLOUDINARY_CLOUD_NAME = String(process.env.CLOUDINARY_CLOUD_NAME || '').trim();
+const CLOUDINARY_API_KEY = String(process.env.CLOUDINARY_API_KEY || '').trim();
+const CLOUDINARY_API_SECRET = String(process.env.CLOUDINARY_API_SECRET || '').trim();
+const CLOUDINARY_URL = String(process.env.CLOUDINARY_URL || '').trim();
 
-const defaultData = {
-  users: [{ id: "admin-1", username: "admin", password: "azhung12", role: "admin", balance: 0, createdAt: new Date().toISOString() }],
+const root = __dirname;
+const dataDir = process.env.DATA_DIR || path.join(root, 'data');
+const uploadDir = process.env.UPLOAD_DIR || path.join(root, 'uploads');
+const dbFile = path.join(dataDir, 'app-data.json');
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+if (CLOUDINARY_URL) {
+  cloudinary.config({ cloudinary_url: CLOUDINARY_URL });
+} else {
+  cloudinary.config({
+    cloud_name: CLOUDINARY_CLOUD_NAME,
+    api_key: CLOUDINARY_API_KEY,
+    api_secret: CLOUDINARY_API_SECRET
+  });
+}
+const useCloudinary = !!(CLOUDINARY_URL || (CLOUDINARY_CLOUD_NAME && CLOUDINARY_API_KEY && CLOUDINARY_API_SECRET));
+let mongoClient = null;
+let stateCollection = null;
+let saveQueue = Promise.resolve();
+function now() { return new Date().toISOString(); }
+function uid(prefix) { return prefix + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8); }
+function daysInactive(u) {
+  const t = new Date(u.last_login || u.created_at || now()).getTime();
+  return Math.max(0, Math.floor((Date.now() - t) / 86400000));
+}
+
+const defaults = {
+  users: [], services: [], rentals: [], deposits: [], notifications: [], dmxProducts: [], dmxOrders: [],
   settings: {
-    siteName: "OTP 24H", logoText: "OTP", logoImage: "", background: "bg-slate-950",
-    announcement: "Chào mừng bạn đến với OTP 24H.\nHệ thống thuê sim nhận mã tự động.", bannerImage: "",
-    bankName: "TECHCOMBANK", bankAccountNumber: "MS00T07014613285196", bankBeneficiary: "NGUYEN VAN HUNG", bankQrUrl: "",
-    topupNote: "Nội dung chuyển khoản: username của bạn.\nSau khi chuyển khoản hãy tạo yêu cầu nạp tiền để admin duyệt."
-  },
-  providerSettings: { chayApiKey: process.env.CHAYCODESO3_API_KEY || "248c26ea0cd1371009db5dd443339ca1", chayEnabled: true, codesimApiKey: process.env.CODESIM_API_KEY || "", codesimEnabled: true },
-  serviceOverrides: {}, orders: [], topups: []
-};
-
-app.disable("x-powered-by");
-app.use(cors());
-app.use(express.json({ limit: "2mb" }));
-
-const nowIso = () => new Date().toISOString();
-const makeId = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-const normalizeName = (name) => String(name || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "").trim();
-const maskKey = (key = "") => !key ? "" : key.length <= 14 ? "********" : key.slice(0, 8) + "..." + key.slice(-6);
-const publicUser = (u) => { const { password, ...safe } = u; return safe; };
-const getClientIp = (req) => req.headers["x-forwarded-for"] || req.socket.remoteAddress || "";
-const getChayKey = (data) => data.providerSettings?.chayApiKey || process.env.CHAYCODESO3_API_KEY || "";
-const getCodesimKey = (data) => data.providerSettings?.codesimApiKey || process.env.CODESIM_API_KEY || "";
-const clearServiceCache = () => { serviceCache = { key: "", expiresAt: 0, value: null }; };
-
-async function getCollection() {
-  if (!MONGODB_URI) throw new Error("Missing MONGODB_URI. Add it in Render Environment.");
-  if (!mongoClient) {
-    mongoClient = new MongoClient(MONGODB_URI, { maxPoolSize: 10, serverSelectionTimeoutMS: 10000, connectTimeoutMS: 10000 });
-    await mongoClient.connect();
-    mongoCollection = mongoClient.db(DB_NAME).collection(DATA_COLLECTION);
-    await mongoCollection.createIndex({ id: 1 }, { unique: true });
+    siteName: 'Có All Dịch Vụ',
+    brandText: 'Thuê sim nhanh - nhiều nhà mạng - quản lý dễ dàng',
+    logoUrl: '', adUrl: '', themeColor: '#2563eb', layoutMode: 'modern',
+    depositInfo: 'Ngân hàng: MB Bank\nSố tài khoản: 0123456789\nChủ tài khoản: HUNG NBYT\nNội dung: nap username',
+    qrImage: '',
+    legacyApiBaseUrl: 'https://chaycodeso3.com/api',
+    legacyApiKey: '248c26ea0cd1371009db5dd443339ca1',
+    codesimApiBaseUrl: 'https://apisim.codesim.net',
+    codesimApiKey: 'eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJudWJpYTMiLCJqdGkiOiI4NDM1NiIsImlhdCI6MTc3NzA4NDE5NiwiZXhwIjoxODM5MjkyMTk2fQ.F5SrJi-hvbhovlmaoxHyIcqshXwbnapb-nltkXkPQO2WLTG8kr5VRPHZdu8ZYdrzmi8m6pTbUZtMo1dSsI6cvA',
+    apiBaseUrl: 'https://chaycodeso3.com/api',
+    apiProvider: 'legacy',
+    apiKey: '248c26ea0cd1371009db5dd443339ca1',
+    otpTimeoutMinutes: '20'
   }
-  return mongoCollection;
+};
+let db = null;
+
+function normalizeDb(parsed) {
+  parsed = parsed || {};
+  return { ...defaults, ...parsed, dmxProducts: parsed.dmxProducts || [], dmxOrders: parsed.dmxOrders || [], settings: { ...defaults.settings, ...(parsed.settings || {}) } };
 }
-async function readData() {
-  const collection = await getCollection();
-  let doc = await collection.findOne({ id: "main" });
-  if (!doc) { doc = { id: "main", ...defaultData, createdAt: nowIso(), updatedAt: nowIso() }; await collection.insertOne(doc); }
-  return { ...defaultData, ...doc, settings: { ...defaultData.settings, ...(doc.settings || {}) }, providerSettings: { ...defaultData.providerSettings, ...(doc.providerSettings || {}) }, users: doc.users || defaultData.users, serviceOverrides: doc.serviceOverrides || {}, orders: doc.orders || [], topups: doc.topups || [] };
-}
-async function writeData(data) {
-  const collection = await getCollection();
-  const { _id, ...clean } = data;
-  await collection.updateOne({ id: "main" }, { $set: { ...clean, id: "main", updatedAt: nowIso() } }, { upsert: true });
-}
-async function requireAdmin(req, res, next) {
+async function loadDb() {
+  if (MONGODB_URI) {
+    mongoClient = new MongoClient(MONGODB_URI);
+    await mongoClient.connect();
+    stateCollection = mongoClient.db(MONGODB_DB).collection('app_state');
+    const doc = await stateCollection.findOne({ _id: 'main' });
+    if (doc) return normalizeDb(doc.data || doc);
+    let initial = null;
+    try {
+      if (fs.existsSync(dbFile)) initial = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
+    } catch (e) { console.error('Không đọc được file JSON để import:', e); }
+    const first = normalizeDb(initial || defaults);
+    await stateCollection.replaceOne({ _id: 'main' }, { _id: 'main', data: first, updated_at: now() }, { upsert: true });
+    return first;
+  }
   try {
-    const data = await readData();
-    const user = data.users.find(u => u.id === req.headers["x-user-id"] && u.role === "admin");
-    if (!user) return res.status(403).json({ message: "Bạn không có quyền admin" });
-    req.data = data; req.admin = user; next();
-  } catch (e) { res.status(500).json({ message: e.message || "Lỗi server" }); }
+    if (fs.existsSync(dbFile)) return normalizeDb(JSON.parse(fs.readFileSync(dbFile, 'utf8')));
+  } catch (e) { console.error('Không đọc được database JSON:', e); }
+  return JSON.parse(JSON.stringify(defaults));
 }
-async function getJson(url, timeoutMs = HTTP_TIMEOUT_MS) {
-  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs);
+function saveDb() {
+  if (stateCollection) {
+    const snapshot = JSON.parse(JSON.stringify(db));
+    saveQueue = saveQueue.then(() => stateCollection.replaceOne({ _id: 'main' }, { _id: 'main', data: snapshot, updated_at: now() }, { upsert: true }))
+      .catch(e => console.error('Không lưu được MongoDB:', e));
+    return saveQueue;
+  }
+  const tmp = dbFile + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
+  fs.renameSync(tmp, dbFile);
+}
+async function migrate() {
+  let changed = false;
+  if (!db.users.find(u => u.username === ADMIN_USERNAME)) {
+    db.users.push({ id: uid('u'), username: ADMIN_USERNAME, password_hash: bcrypt.hashSync(ADMIN_PASSWORD, 10), role: 'admin', balance: 0, created_at: now(), last_login: now(), status: 'active' });
+    changed = true;
+  }
+  if (!db.services.length) {
+    [
+      ['Facebook', 'Viettel', 2500, 'Thuê sim nhận OTP Facebook'],
+      ['Zalo', 'VinaPhone', 3000, 'Thuê sim nhận OTP Zalo'],
+      ['Telegram', 'MobiFone', 3500, 'Thuê sim nhận OTP Telegram'],
+      ['Shopee', 'Vietnamobile', 2000, 'Thuê sim nhận OTP Shopee'],
+      ['Google/Gmail', 'Viettel', 4000, 'Thuê sim nhận OTP Google']
+    ].forEach(s => db.services.push({ id: uid('s'), name: s[0], network: s[1], price: s[2], visible: 0, description: s[3], imageUrl: '', created_at: now(), updated_at: now() }));
+    changed = true;
+  }
+  if (changed) saveDb();
+}
+
+app.use(cors());
+app.use(express.json({ limit: '10mb' }));
+app.use('/uploads', express.static(uploadDir));
+app.use(express.static(path.join(root, 'public')));
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+function uploadToCloudinary(file, folder = 'coalldichvu') {
+  if (!file) return Promise.resolve('');
+  if (!useCloudinary) {
+    const filename = Date.now() + '_' + file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    fs.writeFileSync(path.join(uploadDir, filename), file.buffer);
+    return Promise.resolve('/uploads/' + filename);
+  }
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream({ folder, resource_type: 'image' }, (err, result) => {
+      if (err) {
+        console.error('Cloudinary upload error:', err.message || err);
+        return reject(new Error(err.message || 'Cloudinary upload failed'));
+      }
+      resolve(result.secure_url);
+    });
+    stream.end(file.buffer);
+  });
+}
+
+function sign(user) { return jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '7d' }); }
+function cleanUser(u) { return u ? { id: u.id, username: u.username, role: u.role, balance: u.balance || 0, created_at: u.created_at, last_login: u.last_login, status: u.status || 'active' } : null; }
+function auth(req, res, next) {
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/, '');
+  if (!token) return res.status(401).json({ error: 'Bạn chưa đăng nhập' });
   try {
-    const response = await fetch(url, { method: "GET", signal: controller.signal, headers: { Accept: "application/json, text/plain, */*", "User-Agent": "Mozilla/5.0 OTP24H" } });
-    const text = await response.text(); let data;
-    try { data = JSON.parse(text); } catch { data = { error: true, httpStatus: response.status, message: "API trả về dữ liệu không hợp lệ", rawPreview: text.slice(0, 500) }; }
-    if (!response.ok && !data.httpStatus) data.httpStatus = response.status;
-    return data;
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = db.users.find(u => u.id === decoded.id);
+    if (!user || user.status !== 'active') return res.status(401).json({ error: 'Tài khoản không hợp lệ hoặc đã bị khóa/xóa' });
+    req.user = user; next();
+  } catch { res.status(401).json({ error: 'Phiên đăng nhập hết hạn' }); }
+}
+function adminOnly(req, res, next) { if (req.user.role !== 'admin') return res.status(403).json({ error: 'Chỉ admin được dùng chức năng này' }); next(); }
+function providerCfg(provider) {
+  provider = String(provider || 'legacy').toLowerCase();
+  if (provider === 'codesim') return {
+    provider: 'codesim',
+    base: String(db.settings.codesimApiBaseUrl || 'https://apisim.codesim.net').trim().replace(/\/+$/, ''),
+    key: String(db.settings.codesimApiKey || process.env.CODESIM_API_KEY || '').trim()
+  };
+  return {
+    provider: 'legacy',
+    base: String(db.settings.legacyApiBaseUrl || db.settings.apiBaseUrl || 'https://chaycodeso3.com/api').trim().replace(/\/+$/, ''),
+    key: String(db.settings.legacyApiKey || db.settings.apiKey || process.env.SIM_API_KEY || '').trim()
+  };
+}
+function getOtpTimeoutMinutes() {
+  const n = Number(db.settings.otpTimeoutMinutes || 20);
+  return Number.isFinite(n) && n > 0 ? n : 20;
+}
+function buildUrlWithBase(base, pathname, params = {}) {
+  const url = new URL(base + pathname);
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && String(v) !== '') url.searchParams.set(k, String(v));
+  });
+  return url;
+}
+async function fetchJson(url) {
+  const r = await fetch(url.toString(), {
+    method: 'GET',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+      'Accept': 'application/json,text/plain,*/*'
+    }
+  });
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error('API trả về không phải JSON: ' + text.slice(0, 160)); }
+  if (!r.ok) throw new Error(data.message || data.Msg || ('API lỗi HTTP ' + r.status));
+  return data;
+}
+function isProviderOk(provider, data) {
+  return provider === 'codesim' ? Number(data.status) === 200 : Number(data.ResponseCode) === 0;
+}
+async function simApi(provider, action, params = {}) {
+  const cfg = providerCfg(provider);
+  if (!cfg.key) throw new Error('Admin chưa cài API key cho ' + cfg.provider);
+  if (cfg.provider === 'codesim') {
+    if (action === 'account') return fetchJson(buildUrlWithBase(cfg.base, '/yourself/information-by-api-key', { api_key: cfg.key }));
+    if (action === 'services') return fetchJson(buildUrlWithBase(cfg.base, '/service/get_service_by_api_key', { api_key: cfg.key }));
+    if (action === 'networks') return fetchJson(buildUrlWithBase(cfg.base, '/network/get-network-by-api-key', { api_key: cfg.key }));
+    if (action === 'rent') return fetchJson(buildUrlWithBase(cfg.base, '/sim/get_sim', { api_key: cfg.key, service_id: params.service_id, network_id: params.network_id, phone: params.phone }));
+    if (action === 'code') return fetchJson(buildUrlWithBase(cfg.base, '/otp/get_otp_by_phone_api_key', { api_key: cfg.key, otp_id: params.otp_id }));
+    if (action === 'cancel') return fetchJson(buildUrlWithBase(cfg.base, '/sim/cancel_api_key/' + encodeURIComponent(params.sim_id || ''), { api_key: cfg.key }));
+  }
+  const url = new URL(cfg.base);
+  const actMap = { account: 'account', services: 'app', rent: 'number', code: 'code', cancel: 'expired' };
+  Object.entries({ ...params, act: actMap[action] || action, apik: cfg.key }).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && String(v) !== '') url.searchParams.set(k, String(v));
+  });
+  return fetchJson(url);
+}
+function normalizeServices(provider, data) {
+  const arr = provider === 'codesim' ? (Array.isArray(data.data) ? data.data : []) : (Array.isArray(data.Result) ? data.Result : []);
+  return arr.map(a => ({
+    provider,
+    external_app_id: String(provider === 'codesim' ? (a.id || a.Id || '') : (a.Id || a.id || '')).trim(),
+    name: String(provider === 'codesim' ? (a.name || a.Name || '') : (a.Name || a.name || '')).trim(),
+    api_cost: Math.floor(Number(provider === 'codesim' ? (a.price || a.Cost || 0) : (a.Cost || a.price || 0)))
+  })).filter(x => x.external_app_id && x.name);
+}
+async function cancelExternalRental(r) {
+  if (r.cancelled_external || !r.external_sim_id) return null;
+  try {
+    const out = await simApi(r.provider || 'legacy', 'cancel', { sim_id: r.external_sim_id, id: r.external_sim_id });
+    r.cancelled_external = 1;
+    return out;
   } catch (e) {
-    if (e.name === "AbortError") return { error: true, timeout: true, message: "API nguồn phản hồi quá lâu" };
-    return { error: true, message: e.message || "Không gọi được API nguồn" };
-  } finally { clearTimeout(timer); }
+    r.note = (r.note ? r.note + ' | ' : '') + 'Không hủy được sim API: ' + e.message;
+    return null;
+  }
 }
-async function callChay(data, params) {
-  const apiKey = getChayKey(data);
-  if (!apiKey) return { ResponseCode: 400, Msg: "Chưa cấu hình chaycodeso3 API key", Result: null };
-  const url = new URL(CHAY_API_BASE); url.searchParams.set("apik", apiKey);
-  Object.entries(params || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v)); });
-  return getJson(url);
+async function refundRental(r, reason = 'Hết thời gian chờ OTP, đã tự hoàn tiền') {
+  if (!r || r.refunded || r.otp_code || r.status === 'Đã nhận code') return false;
+  const owner = db.users.find(u => u.id === r.user_id);
+  if (owner) owner.balance = Math.floor(Number(owner.balance || 0) + Number(r.price || 0));
+  r.refunded = 1;
+  r.status = 'Không nhận được code';
+  r.ended_at = r.ended_at || now();
+  r.note = reason;
+  await cancelExternalRental(r);
+  return true;
 }
-async function callCodesim(data, pathName, params = {}) {
-  const apiKey = getCodesimKey(data);
-  if (!apiKey) return { status: 400, message: "Chưa cấu hình CodeSim API key", data: null };
-  const url = new URL(CODESIM_API_BASE + pathName); url.searchParams.set("api_key", apiKey);
-  Object.entries(params || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v)); });
-  return getJson(url);
+async function processExpiredRentals() {
+  const timeoutMs = getOtpTimeoutMinutes() * 60 * 1000;
+  let changed = false;
+  for (const r of db.rentals || []) {
+    const waiting = !r.otp_code && !r.refunded && !r.ended_at && String(r.status || '').toLowerCase().includes('chờ');
+    if (!waiting) continue;
+    const t = new Date(r.rented_at || r.created_at || now()).getTime();
+    if (Date.now() - t >= timeoutMs) {
+      await refundRental(r);
+      changed = true;
+    }
+  }
+  if (changed) saveDb();
 }
-const isChayOk = (api) => api && Number(api.ResponseCode) === 0;
-const isCodesimOk = (api) => api && Number(api.status) === 200;
-const serviceFromChay = (raw) => ({ id: "chay-" + normalizeName(raw.Name || raw.Id), sourceKey: `chaycodeso3:${raw.Id}`, provider: "chaycodeso3", providerId: raw.Id, originalName: raw.Name, name: raw.Name, providerCost: Number(raw.Cost || 0), price: Number(raw.Cost || 0), hidden: true });
-const serviceFromCodesim = (raw) => ({ id: `codesim-${raw.id}`, sourceKey: `codesim:${raw.id}`, provider: "codesim", providerId: raw.id, originalName: raw.name, name: raw.name, providerCost: Number(raw.price || 0), price: Number(raw.price || 0), hidden: true });
-const applyOverride = (s, overrides = {}) => { const c = overrides[s.sourceKey] || {}; return { ...s, name: c.name || s.originalName, price: c.price !== undefined ? Number(c.price) : s.providerCost, hidden: c.hidden !== undefined ? Boolean(c.hidden) : true, note: c.note || "" }; };
-async function getChayServices(data) { if (!data.providerSettings?.chayEnabled) return { services: [], error: null }; const api = await callChay(data, { act: "app" }); if (!isChayOk(api)) return { services: [], error: api }; return { services: (api.Result || []).map(serviceFromChay), error: null }; }
-async function getCodesimServices(data) { if (!data.providerSettings?.codesimEnabled) return { services: [], error: null }; const api = await callCodesim(data, "/service/get_service_by_api_key"); if (!isCodesimOk(api)) return { services: [], error: api }; return { services: (api.data || []).map(serviceFromCodesim), error: null }; }
-function serviceCacheKey(data) { return JSON.stringify({ chayEnabled: !!data.providerSettings?.chayEnabled, codesimEnabled: !!data.providerSettings?.codesimEnabled, chayKey: getChayKey(data) ? "1" : "0", codesimKey: getCodesimKey(data) ? "1" : "0" }); }
-async function getAllServices(data, force = false) {
-  const key = serviceCacheKey(data); if (!force && serviceCache.value && serviceCache.key === key && Date.now() < serviceCache.expiresAt) return serviceCache.value;
-  const [chay, codesim] = await Promise.all([getChayServices(data), getCodesimServices(data)]);
-  const value = { services: [...chay.services, ...codesim.services], errors: [chay.error ? { provider: "chaycodeso3", error: chay.error } : null, codesim.error ? { provider: "codesim", error: codesim.error } : null].filter(Boolean) };
-  serviceCache = { key, expiresAt: Date.now() + SERVICE_CACHE_MS, value }; return value;
+function safeSettingsForUser(settings, isAdmin) {
+  const out = { ...settings };
+  if (!isAdmin) { delete out.apiKey; delete out.legacyApiKey; delete out.codesimApiKey; }
+  if (isAdmin && out.legacyApiKey) out.legacyApiKeyMasked = out.legacyApiKey.slice(0, 6) + '...' + out.legacyApiKey.slice(-4);
+  if (isAdmin && out.codesimApiKey) out.codesimApiKeyMasked = out.codesimApiKey.slice(0, 6) + '...' + out.codesimApiKey.slice(-4);
+  if (isAdmin && out.apiKey) out.apiKeyMasked = out.apiKey.slice(0, 6) + '...' + out.apiKey.slice(-4);
+  return out;
 }
-const findUser = (data, id) => data.users.find(u => u.id === id);
 
-app.get("/health", (req, res) => res.json({ ok: true, service: "otp24h", time: nowIso() }));
-app.get("/api/db-status", async (req, res) => { try { await getCollection(); res.json({ ok: true, db: DB_NAME }); } catch (e) { res.status(500).json({ ok: false, message: e.message }); } });
-app.get("/api/settings", async (req, res) => res.json((await readData()).settings));
-app.put("/api/settings", requireAdmin, async (req, res) => { const d = req.data; d.settings = { ...d.settings, ...req.body }; await writeData(d); res.json(d.settings); });
-app.get("/api/admin/provider-settings", requireAdmin, async (req, res) => { const d = req.data; res.json({ chayEnabled: !!d.providerSettings?.chayEnabled, chayApiKeyMasked: maskKey(getChayKey(d)), hasChayApiKey: !!getChayKey(d), codesimEnabled: !!d.providerSettings?.codesimEnabled, codesimApiKeyMasked: maskKey(getCodesimKey(d)), hasCodesimApiKey: !!getCodesimKey(d) }); });
-app.put("/api/admin/provider-settings", requireAdmin, async (req, res) => { const d = req.data; d.providerSettings = { ...(d.providerSettings || {}), chayEnabled: req.body.chayEnabled !== undefined ? Boolean(req.body.chayEnabled) : !!d.providerSettings?.chayEnabled, codesimEnabled: req.body.codesimEnabled !== undefined ? Boolean(req.body.codesimEnabled) : !!d.providerSettings?.codesimEnabled }; if (String(req.body.chayApiKey || "").trim()) d.providerSettings.chayApiKey = String(req.body.chayApiKey).trim(); if (String(req.body.codesimApiKey || "").trim()) d.providerSettings.codesimApiKey = String(req.body.codesimApiKey).trim(); clearServiceCache(); await writeData(d); res.json({ chayEnabled: !!d.providerSettings.chayEnabled, chayApiKeyMasked: maskKey(d.providerSettings.chayApiKey), hasChayApiKey: !!d.providerSettings.chayApiKey, codesimEnabled: !!d.providerSettings.codesimEnabled, codesimApiKeyMasked: maskKey(d.providerSettings.codesimApiKey), hasCodesimApiKey: !!d.providerSettings.codesimApiKey }); });
-app.get("/api/admin/provider-test", requireAdmin, async (req, res) => {
-  const data = req.data;
-  const [chayResult, codesimResult] = await Promise.allSettled([callChay(data, { act: "account" }), callCodesim(data, "/yourself/information-by-api-key")]);
-  const chay = chayResult.status === "fulfilled" ? chayResult.value : { error: true, message: chayResult.reason?.message || "Không gọi được chaycodeso3" };
-  const codesim = codesimResult.status === "fulfilled" ? codesimResult.value : { error: true, message: codesimResult.reason?.message || "Không gọi được CodeSim" };
-  res.json({ ok: isChayOk(chay) && isCodesimOk(codesim), chaycodeso3: { ok: isChayOk(chay), data: chay }, codesim: { ok: isCodesimOk(codesim), data: codesim } });
+app.get('/api/health', (req, res) => res.json({ ok: true, app: 'Có All Dịch Vụ', db: stateCollection ? 'mongodb' : 'json', cloudinary: useCloudinary, time: now() }));
+app.get('/api/settings', (req, res) => {
+  let isAdmin = false;
+  try {
+    const token = (req.headers.authorization || '').replace(/^Bearer\s+/, '');
+    if (token) {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      const u = db.users.find(x => x.id === decoded.id);
+      isAdmin = !!u && u.role === 'admin';
+    }
+  } catch {}
+  res.json(safeSettingsForUser(db.settings, isAdmin));
 });
-app.post("/api/register", async (req, res) => { const { username, password } = req.body; const cleanUsername = String(username || "").trim(); if (!cleanUsername || !password) return res.status(400).json({ message: "Thiếu tài khoản hoặc mật khẩu" }); const d = await readData(); if (d.users.find(u => u.username.toLowerCase() === cleanUsername.toLowerCase())) return res.status(409).json({ message: "Tài khoản đã tồn tại" }); const user = { id: makeId("u"), username: cleanUsername, password: String(password), role: "user", balance: 0, createdAt: nowIso(), registerIp: getClientIp(req) }; d.users.push(user); await writeData(d); res.json(publicUser(user)); });
-app.post("/api/login", async (req, res) => { const cleanUsername = String(req.body.username || "").trim().toLowerCase(); const cleanPassword = String(req.body.password || ""); const d = await readData(); const user = d.users.find(u => u.username.toLowerCase() === cleanUsername && u.password === cleanPassword); if (!user) return res.status(401).json({ message: "Sai tài khoản hoặc mật khẩu" }); res.json(publicUser(user)); });
-app.post("/api/change-password", async (req, res) => { const d = await readData(); const user = findUser(d, req.body.userId); if (!user) return res.status(404).json({ message: "Không tìm thấy user" }); if (user.password !== req.body.oldPassword) return res.status(400).json({ message: "Mật khẩu cũ không đúng" }); user.password = String(req.body.newPassword || ""); await writeData(d); res.json({ message: "Đổi mật khẩu thành công" }); });
-app.get("/api/user-stats", requireAdmin, async (req, res) => { const d = req.data; res.json(d.users.map(user => ({ ...publicUser(user), totalTopup: d.topups.filter(t => t.userId === user.id && t.status === "approved").reduce((s, t) => s + Number(t.amount || 0), 0), totalUsed: d.orders.filter(o => o.userId === user.id && o.status !== "canceled" && !(o.status === "expired" && o.refunded)).reduce((s, o) => s + Number(o.price || 0), 0), balance: Number(user.balance || 0) }))); });
-app.post("/api/users/:id/adjust-balance", requireAdmin, async (req, res) => { const d = req.data; const u = findUser(d, req.params.id); if (!u) return res.status(404).json({ message: "Không tìm thấy user" }); u.balance = Math.max(0, Number(u.balance || 0) + Number(req.body.amount || 0)); await writeData(d); res.json(publicUser(u)); });
-app.put("/api/users/:id", requireAdmin, async (req, res) => { const d = req.data; const u = findUser(d, req.params.id); if (!u) return res.status(404).json({ message: "Không tìm thấy user" }); if (req.body.password) u.password = String(req.body.password); if (req.body.balance !== undefined) u.balance = Math.max(0, Number(req.body.balance)); await writeData(d); res.json(publicUser(u)); });
-app.delete("/api/users/:id", requireAdmin, async (req, res) => { const d = req.data; const u = findUser(d, req.params.id); if (!u) return res.status(404).json({ message: "Không tìm thấy user" }); if (u.role === "admin") return res.status(400).json({ message: "Không thể xóa admin" }); d.users = d.users.filter(x => x.id !== req.params.id); await writeData(d); res.json({ success: true }); });
-app.get("/api/services", async (req, res) => { const d = await readData(); const { services, errors } = await getAllServices(d); const list = services.map(s => applyOverride(s, d.serviceOverrides)).filter(s => !s.hidden).sort((a, b) => a.name.localeCompare(b.name)); if (!list.length && errors.length) return res.status(502).json({ message: "Không tải được dịch vụ từ API nguồn", errors }); res.json(list); });
-app.get("/api/admin/services", requireAdmin, async (req, res) => { const d = req.data; const { services, errors } = await getAllServices(d, req.query.force === "1"); const list = services.map(s => applyOverride(s, d.serviceOverrides)).sort((a, b) => a.name.localeCompare(b.name)); res.json({ sources: list, errors, counts: { chaycodeso3: list.filter(s => s.provider === "chaycodeso3").length, codesim: list.filter(s => s.provider === "codesim").length, visible: list.filter(s => !s.hidden).length, hidden: list.filter(s => s.hidden).length, total: list.length } }); });
-app.put("/api/admin/services/:id", requireAdmin, async (req, res) => { const d = req.data; const id = String(req.params.id); d.serviceOverrides[id] = { ...(d.serviceOverrides[id] || {}), ...req.body }; await writeData(d); res.json(d.serviceOverrides[id]); });
-app.post("/api/orders", async (req, res) => { const { userId, appId, carrier, prefix, sendsms, number, networkId } = req.body; const d = await readData(); const user = findUser(d, userId); if (!user) return res.status(404).json({ message: "Không tìm thấy user" }); const { services, errors } = await getAllServices(d); const service = services.map(s => applyOverride(s, d.serviceOverrides)).find(s => String(s.sourceKey) === String(appId) || String(s.id) === String(appId)); if (!service) return res.status(404).json({ message: "Dịch vụ không tồn tại", errors }); if (service.hidden) return res.status(400).json({ message: "Dịch vụ đang bị ẩn" }); if (Number(user.balance) < Number(service.price)) return res.status(400).json({ message: "Số dư user không đủ" }); let api, order; if (service.provider === "codesim") { api = await callCodesim(d, "/sim/get_sim", { service_id: service.providerId, network_id: networkId, phone: prefix || number }); if (!isCodesimOk(api) || !api.data?.phone) return res.status(400).json({ message: api.message || "Không lấy được số CodeSim", api }); user.balance -= Number(service.price); order = { id: makeId("o"), provider: "codesim", sourceKey: service.sourceKey, providerQueueId: api.data.otpId, providerSimId: api.data.simId, userId, appId: service.sourceKey, providerServiceId: service.providerId, appName: service.name, carrier: carrier || "CodeSim", number: api.data.phone, providerCost: Number(api.data.payment || service.providerCost), price: service.price, status: "waiting", code: "", sms: "", refunded: false, createdAt: nowIso() }; } else { api = await callChay(d, { act: "number", appId: service.providerId, carrier, prefix, sendsms: sendsms ? 1 : undefined, number }); if (!isChayOk(api)) return res.status(400).json({ message: api.Msg || "Không lấy được số", api }); user.balance -= Number(service.price); order = { id: makeId("o"), provider: "chaycodeso3", sourceKey: service.sourceKey, providerQueueId: api.Result.Id, providerSimId: api.Result.Id, userId, appId: service.sourceKey, providerServiceId: service.providerId, appName: service.name, carrier: carrier || "Tất cả", number: api.Result.Number, providerCost: Number(api.Result.Cost || service.providerCost), price: service.price, status: "waiting", code: "", sms: "", refunded: false, createdAt: nowIso() }; } d.orders.unshift(order); await writeData(d); res.json({ order, user: publicUser(user), api }); });
-app.get("/api/orders", async (req, res) => { const d = await readData(); const user = findUser(d, req.query.userId); if (!user) return res.status(404).json({ message: "Không tìm thấy user" }); res.json((user.role === "admin" ? d.orders : d.orders.filter(o => o.userId === user.id)).slice(0, 300)); });
-app.post("/api/orders/:id/check-code", async (req, res) => { const d = await readData(); const o = d.orders.find(x => x.id === req.params.id); if (!o) return res.status(404).json({ message: "Không tìm thấy order" }); let api, updatedUser = null; if (o.status !== "waiting") return res.json({ order: o, api: { message: "Order không còn chờ OTP" }, user: null }); if (o.provider === "codesim") { api = await callCodesim(d, "/otp/get_otp_by_phone_api_key", { otp_id: o.providerQueueId }); if (isCodesimOk(api) && api.data?.code) { o.status = "done"; o.code = api.data.code || ""; o.sms = api.data.content || ""; } } else { api = await callChay(d, { act: "code", id: o.providerQueueId }); if (api.ResponseCode === 0) { o.status = "done"; o.code = api.Result?.Code || ""; o.sms = api.Result?.SMS || ""; } else if (api.ResponseCode === 2) { o.status = "expired"; if (!o.refunded) { const u = findUser(d, o.userId); if (u) { u.balance = Number(u.balance || 0) + Number(o.price || 0); updatedUser = publicUser(u); } o.refunded = true; o.refundedAt = nowIso(); o.refundReason = "expired_no_otp"; } } } o.lastCheckedAt = nowIso(); await writeData(d); res.json({ order: o, api, user: updatedUser }); });
-app.post("/api/orders/:id/cancel", async (req, res) => { const d = await readData(); const o = d.orders.find(x => x.id === req.params.id); if (!o) return res.status(404).json({ message: "Không tìm thấy order" }); if (o.status !== "waiting") return res.status(400).json({ message: "Order không còn trạng thái chờ" }); const api = o.provider === "codesim" ? await callCodesim(d, `/sim/cancel_api_key/${o.providerSimId}`) : await callChay(d, { act: "expired", id: o.providerQueueId }); const ok = o.provider === "codesim" ? isCodesimOk(api) : api.ResponseCode === 0; let updatedUser = null; if (ok && !o.refunded) { const u = findUser(d, o.userId); if (u) { u.balance = Number(u.balance || 0) + Number(o.price || 0); updatedUser = publicUser(u); } o.refunded = true; o.refundedAt = nowIso(); o.refundReason = "user_cancel"; o.status = "canceled"; } await writeData(d); res.json({ order: o, api, user: updatedUser }); });
-app.post("/api/topups", async (req, res) => { const d = await readData(); const u = findUser(d, req.body.userId); const money = Number(req.body.amount || 0); if (!u) return res.status(404).json({ message: "Không tìm thấy user" }); if (!money || money <= 0) return res.status(400).json({ message: "Số tiền nạp không hợp lệ" }); const t = { id: makeId("t"), userId: u.id, username: u.username, amount: money, note: req.body.note || "", status: "pending", createdAt: nowIso() }; d.topups.unshift(t); await writeData(d); res.json(t); });
-app.get("/api/topups", async (req, res) => { const d = await readData(); const u = findUser(d, req.query.userId); if (!u) return res.status(404).json({ message: "Không tìm thấy user" }); res.json(u.role === "admin" ? d.topups : d.topups.filter(t => t.userId === u.id)); });
-app.post("/api/topups/:id/approve", requireAdmin, async (req, res) => { const d = req.data; const t = d.topups.find(x => x.id === req.params.id); if (!t) return res.status(404).json({ message: "Không tìm thấy yêu cầu nạp" }); if (t.status !== "pending") return res.status(400).json({ message: "Yêu cầu này đã xử lý rồi" }); const u = findUser(d, t.userId); if (!u) return res.status(404).json({ message: "Không tìm thấy user" }); u.balance = Number(u.balance || 0) + Number(t.amount || 0); t.status = "approved"; t.approvedAt = nowIso(); t.approvedBy = req.admin.username; await writeData(d); res.json({ topup: t, user: publicUser(u) }); });
-app.post("/api/topups/:id/reject", requireAdmin, async (req, res) => { const d = req.data; const t = d.topups.find(x => x.id === req.params.id); if (!t) return res.status(404).json({ message: "Không tìm thấy yêu cầu nạp" }); t.status = "rejected"; t.rejectedAt = nowIso(); t.rejectedBy = req.admin.username; t.rejectReason = req.body.reason || ""; await writeData(d); res.json(t); });
 
-app.use((error, req, res, next) => { console.error(error); res.status(500).json({ message: error.message || "Lỗi server" }); });
-const distPath = path.resolve("dist");
-app.use(express.static(distPath, { maxAge: "1h", etag: true }));
-app.get(/.*/, (req, res) => res.sendFile(path.join(distPath, "index.html")));
-app.get('/api/health', (req, res) => {
-  res.json({ ok: true });
+app.post('/api/register', (req, res) => {
+  const username = String(req.body.username || '').trim().toLowerCase();
+  const password = String(req.body.password || '');
+  if (!/^[a-z0-9_]{3,30}$/.test(username)) return res.status(400).json({ error: 'Tên đăng nhập chỉ gồm chữ thường, số, dấu _, từ 3-30 ký tự' });
+  if (password.length < 6) return res.status(400).json({ error: 'Mật khẩu tối thiểu 6 ký tự' });
+  if (db.users.some(u => u.username === username)) return res.status(400).json({ error: 'Tên đăng nhập đã tồn tại' });
+  const user = { id: uid('u'), username, password_hash: bcrypt.hashSync(password, 10), role: 'user', balance: 0, created_at: now(), last_login: now(), status: 'active' };
+  db.users.push(user); saveDb();
+  res.json({ token: sign(user), user: cleanUser(user) });
 });
-app.listen(PORT, () => console.log("Server running on port " + PORT));
+
+app.post('/api/login', (req, res) => {
+  const username = String(req.body.username || '').trim().toLowerCase();
+  const password = String(req.body.password || '');
+  const user = db.users.find(u => u.username === username);
+  if (!user || !bcrypt.compareSync(password, user.password_hash)) return res.status(400).json({ error: 'Sai tài khoản hoặc mật khẩu' });
+  if (user.status !== 'active') return res.status(403).json({ error: 'Tài khoản đã bị khóa/xóa' });
+  user.last_login = now(); saveDb();
+  res.json({ token: sign(user), user: cleanUser(user) });
+});
+app.get('/api/me', auth, (req, res) => res.json({ user: cleanUser(req.user) }));
+
+app.get('/api/services', auth, (req, res) => {
+  const rows = db.services.filter(s => req.user.role === 'admin' || Number(s.visible) === 1).sort((a,b) => (b.visible-a.visible) || a.name.localeCompare(b.name));
+  res.json(rows);
+});
+app.post('/api/rentals', auth, async (req, res) => {
+  try {
+    const service = db.services.find(s => s.id === req.body.service_id && Number(s.visible) === 1);
+    if (!service) return res.status(404).json({ error: 'Dịch vụ không tồn tại hoặc đang ẩn' });
+    if (!service.external_app_id) return res.status(400).json({ error: 'Dịch vụ này chưa gắn Service ID API. Admin hãy đồng bộ API hoặc nhập Service ID.' });
+    if ((req.user.balance || 0) < service.price) return res.status(400).json({ error: 'Số dư web không đủ, vui lòng nạp thêm tiền' });
+    const networkId = String(req.body.carrier || '').trim();
+    const apiResult = await simApi(service.provider || 'legacy', 'rent', { service_id: service.external_app_id, appId: service.external_app_id, carrier: networkId, network_id: networkId });
+    if (!isProviderOk(service.provider || 'legacy', apiResult)) return res.status(400).json({ error: apiResult.message || apiResult.Msg || 'API không cấp được số', api: apiResult });
+    const result = (service.provider === 'codesim') ? (apiResult.data || {}) : (apiResult.Result || {});
+    const phone = service.provider === 'codesim' ? result.phone : (String(result.Number || '').startsWith('0') ? String(result.Number || '') : ('0' + String(result.Number || '')));
+    const otpId = service.provider === 'codesim' ? result.otpId : result.Id;
+    const simId = service.provider === 'codesim' ? result.simId : result.Id;
+    if (!phone || !otpId) return res.status(400).json({ error: apiResult.message || apiResult.Msg || 'API không trả về số sim/OTP ID', api: apiResult });
+    const cost = Math.floor(Number(result.payment || result.Cost || service.price || 0));
+    req.user.balance = Math.floor(Number(req.user.balance || 0) - Number(service.price || cost));
+    const displayNumber = String(phone || '');
+    const rental = {
+      id: uid('r'), user_id: req.user.id, service_id: service.id, service_name: service.name,
+      network: networkId || service.network || '', phone_number: displayNumber, price: service.price, api_cost: cost,
+      external_id: String(otpId || ''), external_sim_id: String(simId || ''), api_app_id: String(service.external_app_id), provider: service.provider || 'legacy',
+      status: 'Đang chờ code', rented_at: now(), ended_at: '', otp_code: '', sms: '', note: apiResult.message || apiResult.Msg || ''
+    };
+    db.rentals.push(rental); saveDb();
+    res.json({ rental, user: cleanUser(req.user), api: apiResult });
+  } catch (e) { res.status(500).json({ error: e.message || 'Không gọi được API thuê sim' }); }
+});
+app.get('/api/rentals', auth, async (req, res) => { await processExpiredRentals(); res.json(db.rentals.filter(r => r.user_id === req.user.id).sort((a,b) => b.rented_at.localeCompare(a.rented_at))); });
+
+app.post('/api/rentals/:id/check-code', auth, async (req, res) => {
+  try {
+    await processExpiredRentals();
+    const r = db.rentals.find(x => x.id === req.params.id && (x.user_id === req.user.id || req.user.role === 'admin'));
+    if (!r) return res.status(404).json({ error: 'Không tìm thấy lượt thuê' });
+    if (r.refunded) return res.json({ rental: r, api: { message: r.note || 'Đã tự hoàn tiền' }, user: cleanUser(req.user) });
+    if (!r.external_id) return res.status(400).json({ error: 'Lượt thuê này không có OTP ID API' });
+    const apiResult = await simApi(r.provider || 'legacy', 'code', { otp_id: r.external_id, id: r.external_id });
+    const provider = r.provider || 'legacy';
+    if (provider === 'codesim' && isProviderOk(provider, apiResult) && apiResult.data && apiResult.data.code) {
+      const result = apiResult.data || {};
+      r.status = 'Đã nhận code'; r.otp_code = String(result.code || ''); r.sms = String(result.content || ''); r.ended_at = now(); r.note = apiResult.message || '';
+    } else if (provider === 'legacy' && isProviderOk(provider, apiResult) && apiResult.Result && apiResult.Result.Code) {
+      const result = apiResult.Result || {};
+      r.status = 'Đã nhận code'; r.otp_code = String(result.Code || ''); r.sms = String(result.SMS || ''); r.ended_at = now(); r.note = apiResult.Msg || '';
+    } else {
+      r.note = apiResult.message || apiResult.Msg || 'Chưa có OTP, vui lòng thử lại sau';
+    }
+    saveDb();
+    res.json({ rental: r, api: apiResult, user: cleanUser(req.user) });
+  } catch (e) { res.status(500).json({ error: e.message || 'Không lấy được code' }); }
+});
+app.post('/api/rentals/:id/cancel', auth, async (req, res) => {
+  try {
+    const r = db.rentals.find(x => x.id === req.params.id && (x.user_id === req.user.id || req.user.role === 'admin'));
+    if (!r) return res.status(404).json({ error: 'Không tìm thấy lượt thuê' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'User không được hủy sim đang thuê. Hệ thống sẽ tự hoàn tiền nếu hết thời gian chờ OTP mà chưa nhận được OTP.' });
+    if (!r.external_sim_id) return res.status(400).json({ error: 'Lượt thuê này không có Sim ID API' });
+    const apiResult = await simApi(r.provider || 'legacy', 'cancel', { sim_id: r.external_sim_id, id: r.external_sim_id });
+    if (isProviderOk(r.provider || 'legacy', apiResult)) { r.status = 'Đã hủy'; r.ended_at = now(); r.cancelled_external = 1; }
+    r.note = apiResult.message || apiResult.Msg || r.note || ''; saveDb();
+    res.json({ rental: r, api: apiResult });
+  } catch (e) { res.status(500).json({ error: e.message || 'Không hủy được lượt thuê' }); }
+});
+
+
+
+app.post('/api/deposits', auth, upload.single('proof'), async (req, res) => {
+  try {
+    const amount = Math.floor(Number(req.body.amount || 0));
+    if (amount <= 0) return res.status(400).json({ error: 'Số tiền nạp không hợp lệ' });
+    const proofUrl = req.file ? await uploadToCloudinary(req.file, 'coalldichvu/deposits') : '';
+    const dep = { id: uid('d'), user_id: req.user.id, amount, content: String(req.body.content || ''), proof_image: proofUrl, status: 'Chờ duyệt', admin_note: '', created_at: now(), reviewed_at: '' };
+    db.deposits.push(dep);
+    db.notifications.push({ id: uid('n'), type: 'deposit', message: `${req.user.username} gửi yêu cầu nạp ${amount.toLocaleString('vi-VN')}đ`, read: 0, created_at: now() });
+    saveDb(); res.json(dep);
+  } catch (e) { res.status(500).json({ error: e.message || 'Không upload được ảnh chứng từ' }); }
+});
+app.get('/api/deposits', auth, (req, res) => res.json(db.deposits.filter(d => d.user_id === req.user.id).sort((a,b) => b.created_at.localeCompare(a.created_at))));
+app.post('/api/upload', auth, adminOnly, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Chưa có file' });
+    const url = await uploadToCloudinary(req.file, 'coalldichvu/admin');
+    res.json({ url });
+  } catch (e) { res.status(500).json({ error: e.message || 'Không upload được ảnh' }); }
+});
+
+app.get('/api/admin/users', auth, adminOnly, (req, res) => res.json(db.users.map(u => ({ ...cleanUser(u), days_inactive: daysInactive(u) })).sort((a,b) => a.role.localeCompare(b.role) || a.username.localeCompare(b.username))));
+app.patch('/api/admin/users/:id', auth, adminOnly, (req, res) => {
+  const user = db.users.find(u => u.id === req.params.id); if (!user) return res.status(404).json({ error: 'Không tìm thấy user' });
+  if (req.body.balance !== undefined) user.balance = Math.floor(Number(req.body.balance || 0));
+  if (req.body.addBalance !== undefined) user.balance = Math.floor(Number(user.balance || 0) + Number(req.body.addBalance || 0));
+  if (req.body.password) user.password_hash = bcrypt.hashSync(String(req.body.password), 10);
+  if (req.body.status) user.status = String(req.body.status);
+  saveDb(); res.json(cleanUser(user));
+});
+app.delete('/api/admin/users/:id', auth, adminOnly, (req, res) => {
+  if (req.params.id === req.user.id) return res.status(400).json({ error: 'Không thể xóa chính bạn' });
+  db.users = db.users.filter(u => u.id !== req.params.id); db.rentals = db.rentals.filter(r => r.user_id !== req.params.id); db.deposits = db.deposits.filter(d => d.user_id !== req.params.id); db.dmxOrders = (db.dmxOrders||[]).filter(o => o.user_id !== req.params.id); saveDb(); res.json({ ok: true });
+});
+
+app.post('/api/admin/services', auth, adminOnly, (req, res) => {
+  const s = { id: uid('s'), provider: String(req.body.provider || 'legacy'), name: String(req.body.name || '').trim(), network: String(req.body.network || '').trim(), price: Math.floor(Number(req.body.price || 0)), visible: req.body.visible ? 1 : 0, description: String(req.body.description || ''), imageUrl: String(req.body.imageUrl || ''), external_app_id: String(req.body.external_app_id || '').trim(), api_cost: Math.floor(Number(req.body.api_cost || 0)), created_at: now(), updated_at: now() };
+  if (!s.name) return res.status(400).json({ error: 'Thiếu tên dịch vụ' }); db.services.push(s); saveDb(); res.json(s);
+});
+app.post('/api/admin/services/hide-all', auth, adminOnly, (req, res) => {
+  db.services.forEach(s => { s.visible = 0; s.updated_at = now(); });
+  saveDb();
+  res.json({ ok: true, hidden: db.services.length });
+});
+
+app.patch('/api/admin/services/:id', auth, adminOnly, (req, res) => {
+  const s = db.services.find(x => x.id === req.params.id); if (!s) return res.status(404).json({ error: 'Không tìm thấy dịch vụ' });
+  ['name','network','description','external_app_id','imageUrl','provider'].forEach(k => { if (req.body[k] !== undefined) s[k] = String(req.body[k]); });
+  if (req.body.price !== undefined) s.price = Math.floor(Number(req.body.price || 0));
+  if (req.body.visible !== undefined) s.visible = req.body.visible ? 1 : 0;
+  if (req.body.api_cost !== undefined) s.api_cost = Math.floor(Number(req.body.api_cost || 0));
+  s.updated_at = now(); saveDb(); res.json(s);
+});
+app.delete('/api/admin/services/:id', auth, adminOnly, (req, res) => { db.services = db.services.filter(s => s.id !== req.params.id); saveDb(); res.json({ ok: true }); });
+
+app.get('/api/admin/rentals', auth, adminOnly, async (req, res) => { await processExpiredRentals(); res.json(db.rentals.map(r => ({ ...r, username: (db.users.find(u => u.id === r.user_id) || {}).username || 'unknown' })).sort((a,b) => b.rented_at.localeCompare(a.rented_at))); });
+app.patch('/api/admin/rentals/:id', auth, adminOnly, (req, res) => {
+  const r = db.rentals.find(x => x.id === req.params.id); if (!r) return res.status(404).json({ error: 'Không tìm thấy lượt thuê' });
+  ['status','otp_code','note','ended_at'].forEach(k => { if (req.body[k] !== undefined) r[k] = String(req.body[k]); }); saveDb(); res.json(r);
+});
+app.get('/api/admin/deposits', auth, adminOnly, (req, res) => res.json(db.deposits.map(d => ({ ...d, username: (db.users.find(u => u.id === d.user_id) || {}).username || 'unknown' })).sort((a,b) => b.created_at.localeCompare(a.created_at))));
+app.patch('/api/admin/deposits/:id', auth, adminOnly, (req, res) => {
+  const d = db.deposits.find(x => x.id === req.params.id); if (!d) return res.status(404).json({ error: 'Không tìm thấy yêu cầu nạp' });
+  const newStatus = String(req.body.status || d.status);
+  if (d.status !== 'Đã duyệt' && newStatus === 'Đã duyệt') { const u = db.users.find(u => u.id === d.user_id); if (u) u.balance = Math.floor(Number(u.balance || 0) + Number(d.amount || 0)); }
+  d.status = newStatus; d.admin_note = String(req.body.admin_note || d.admin_note || ''); d.reviewed_at = now(); saveDb(); res.json(d);
+});
+app.get('/api/admin/notifications', auth, adminOnly, (req, res) => res.json(db.notifications.sort((a,b) => b.created_at.localeCompare(a.created_at)).slice(0,100)));
+app.patch('/api/admin/notifications/read', auth, adminOnly, (req, res) => { db.notifications.forEach(n => n.read = 1); saveDb(); res.json({ ok: true }); });
+app.patch('/api/admin/settings', auth, adminOnly, (req, res) => { ['siteName','brandText','logoUrl','adUrl','themeColor','layoutMode','depositInfo','qrImage','apiBaseUrl','apiKey','apiProvider','legacyApiBaseUrl','legacyApiKey','codesimApiBaseUrl','codesimApiKey','otpTimeoutMinutes'].forEach(k => { if (req.body[k] !== undefined) db.settings[k] = String(req.body[k]); }); saveDb(); res.json(safeSettingsForUser(db.settings, true)); });
+app.get('/api/admin/sim-api/account', auth, adminOnly, async (req, res) => {
+  try {
+    const provider = String(req.query.provider || 'legacy');
+    res.json(await simApi(provider, 'account'));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/admin/sim-api/apps', auth, adminOnly, async (req, res) => {
+  try {
+    const provider = String(req.query.provider || 'legacy');
+    res.json(await simApi(provider, 'services'));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/admin/sim-api/sync-apps', auth, adminOnly, async (req, res) => {
+  try {
+    const providers = ['legacy','codesim'];
+    const results = await Promise.allSettled(providers.map(p => simApi(p, 'services')));
+    let added = 0, updated = 0, total = 0;
+    const errors = [];
+    results.forEach((r, idx) => {
+      const provider = providers[idx];
+      if (r.status !== 'fulfilled') { errors.push(provider + ': ' + r.reason.message); return; }
+      const data = r.value;
+      if (!isProviderOk(provider, data)) { errors.push(provider + ': ' + (data.message || data.Msg || 'API không OK')); return; }
+      const apps = normalizeServices(provider, data);
+      total += apps.length;
+      apps.forEach(a => {
+        let s = db.services.find(x => String(x.provider || 'legacy') === provider && String(x.external_app_id || '') === a.external_app_id);
+        if (s) { s.name = a.name; s.api_cost = a.api_cost; if (!s.price || Number(req.body.overwritePrice)) s.price = a.api_cost; s.provider = provider; s.updated_at = now(); updated++; }
+        else { db.services.push({ id: uid('s'), provider, name: a.name, network: '', price: a.api_cost, visible: 0, description: '', imageUrl: '', external_app_id: a.external_app_id, api_cost: a.api_cost, created_at: now(), updated_at: now() }); added++; }
+      });
+    });
+    saveDb(); res.json({ ok: true, added, updated, total, errors });
+  } catch (e) { res.status(500).json({ error: e.message || 'Không đồng bộ được app API' }); }
+});
+
+
+// DMX shop products and orders
+function dmxPrice(product, qty) {
+  qty = Math.max(1, Math.floor(Number(qty || 1)));
+  const normal = Math.max(0, Math.floor(Number(product.price || 0)));
+  const minQty = Math.floor(Number(product.bulkMinQty || 0));
+  const bulk = Math.floor(Number(product.bulkPrice || 0));
+  const unit = minQty > 0 && bulk > 0 && qty >= minQty ? bulk : normal;
+  return { unitPrice: unit, total: unit * qty };
+}
+app.get('/api/dmx/products', auth, (req, res) => {
+  const rows = (db.dmxProducts || []).filter(p => req.user.role === 'admin' || Number(p.visible) === 1)
+    .sort((a,b) => String(a.category||'').localeCompare(String(b.category||'')) || String(a.name||'').localeCompare(String(b.name||'')));
+  res.json(rows);
+});
+app.get('/api/dmx/orders', auth, (req, res) => {
+  const rows = (db.dmxOrders || []).filter(o => o.user_id === req.user.id)
+    .sort((a,b) => String(b.created_at).localeCompare(String(a.created_at)));
+  res.json(rows);
+});
+app.post('/api/dmx/orders', auth, (req, res) => {
+  const product = (db.dmxProducts || []).find(p => p.id === req.body.product_id && Number(p.visible) === 1);
+  if (!product) return res.status(404).json({ error: 'Sản phẩm không tồn tại hoặc đang ẩn' });
+  const quantity = Math.max(1, Math.floor(Number(req.body.quantity || 1)));
+  const price = dmxPrice(product, quantity);
+  if ((req.user.balance || 0) < price.total) return res.status(400).json({ error: 'Số dư không đủ để mua sản phẩm' });
+  req.user.balance = Math.floor(Number(req.user.balance || 0) - price.total);
+  const order = {
+    id: uid('dmxo'), user_id: req.user.id, product_id: product.id,
+    product_name: product.name, category: product.category || '', imageUrl: product.imageUrl || '',
+    quantity, unit_price: price.unitPrice, total: price.total,
+    status: 'Đã mua', note: String(req.body.note || ''), created_at: now()
+  };
+  db.dmxOrders = db.dmxOrders || [];
+  db.dmxOrders.push(order);
+  db.notifications.push({ id: uid('n'), type: 'dmx_order', message: `${req.user.username} mua ${quantity} x ${product.name} (${price.total.toLocaleString('vi-VN')}đ)`, read: 0, created_at: now() });
+  saveDb();
+  res.json({ order, user: cleanUser(req.user) });
+});
+app.get('/api/admin/dmx/orders', auth, adminOnly, (req, res) => {
+  const rows = (db.dmxOrders || []).map(o => ({ ...o, username: (db.users.find(u => u.id === o.user_id) || {}).username || 'unknown' }))
+    .sort((a,b) => String(b.created_at).localeCompare(String(a.created_at)));
+  const revenue = rows.reduce((sum,o)=>sum+Number(o.total||0),0);
+  res.json({ rows, stats: { totalOrders: rows.length, revenue } });
+});
+app.post('/api/admin/dmx/products', auth, adminOnly, (req, res) => {
+  const p = {
+    id: uid('dmxp'), name: String(req.body.name || '').trim(), category: String(req.body.category || '').trim(),
+    price: Math.floor(Number(req.body.price || 0)), bulkMinQty: Math.floor(Number(req.body.bulkMinQty || 0)),
+    bulkPrice: Math.floor(Number(req.body.bulkPrice || 0)), visible: req.body.visible ? 1 : 0,
+    description: String(req.body.description || ''), imageUrl: String(req.body.imageUrl || ''),
+    created_at: now(), updated_at: now()
+  };
+  if (!p.name) return res.status(400).json({ error: 'Thiếu tên sản phẩm' });
+  if (p.price <= 0) return res.status(400).json({ error: 'Giá sản phẩm không hợp lệ' });
+  db.dmxProducts = db.dmxProducts || [];
+  db.dmxProducts.push(p); saveDb(); res.json(p);
+});
+app.patch('/api/admin/dmx/products/:id', auth, adminOnly, (req, res) => {
+  const p = (db.dmxProducts || []).find(x => x.id === req.params.id);
+  if (!p) return res.status(404).json({ error: 'Không tìm thấy sản phẩm' });
+  ['name','category','description','imageUrl'].forEach(k => { if (req.body[k] !== undefined) p[k] = String(req.body[k]); });
+  if (req.body.price !== undefined) p.price = Math.floor(Number(req.body.price || 0));
+  if (req.body.bulkMinQty !== undefined) p.bulkMinQty = Math.floor(Number(req.body.bulkMinQty || 0));
+  if (req.body.bulkPrice !== undefined) p.bulkPrice = Math.floor(Number(req.body.bulkPrice || 0));
+  if (req.body.visible !== undefined) p.visible = req.body.visible ? 1 : 0;
+  p.updated_at = now(); saveDb(); res.json(p);
+});
+app.delete('/api/admin/dmx/products/:id', auth, adminOnly, (req, res) => {
+  db.dmxProducts = (db.dmxProducts || []).filter(p => p.id !== req.params.id);
+  saveDb(); res.json({ ok: true });
+});
+
+app.get('*', (req, res) => res.sendFile(path.join(root, 'public', 'index.html')));
+
+async function start() {
+  db = await loadDb();
+  await migrate();
+  app.listen(PORT, () => console.log(`Có All Dịch Vụ running at http://localhost:${PORT} - DB: ${stateCollection ? 'MongoDB' : 'JSON'} - Upload: ${useCloudinary ? 'Cloudinary' : 'local'}`));
+}
+start().catch(err => {
+  console.error('Không khởi động được server:', err);
+  process.exit(1);
+});
