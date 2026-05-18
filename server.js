@@ -56,10 +56,10 @@ const defaults = {
     logoUrl: '', adUrl: '', themeColor: '#2563eb', layoutMode: 'modern',
     depositInfo: 'Ngân hàng: MB Bank\nSố tài khoản: 0123456789\nChủ tài khoản: HUNG NBYT\nNội dung: nap username',
     qrImage: '',
-    legacyApiBaseUrl: 'https://chaycodeso3.com/api',
-    legacyApiKey: '248c26ea0cd1371009db5dd443339ca1',
-    codesimApiBaseUrl: 'https://apisim.codesim.net',
-    codesimApiKey: 'eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJudWJpYTMiLCJqdGkiOiI4NDM1NiIsImlhdCI6MTc3NzA4NDE5NiwiZXhwIjoxODM5MjkyMTk2fQ.F5SrJi-hvbhovlmaoxHyIcqshXwbnapb-nltkXkPQO2WLTG8kr5VRPHZdu8ZYdrzmi8m6pTbUZtMo1dSsI6cvA',
+    
+    
+    
+    
     apiBaseUrl: 'https://chaycodeso3.com/api',
     apiProvider: 'legacy',
     apiKey: '248c26ea0cd1371009db5dd443339ca1',
