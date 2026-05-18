@@ -567,3 +567,83 @@ start().catch(err => {
   console.error('Không khởi động được server:', err);
   process.exit(1);
 });
+
+
+// ------------------ SePay Webhook + API Key + API Verify ------------------
+const axios = require('axios');
+const crypto = require('crypto');
+
+function verifySignature(rawBody, signature, secret) {
+  const hmac = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  return hmac === signature;
+}
+
+app.post('/api/sepay/webhook', express.raw({ type: '*/*' }), async (req, res) => {
+  try {
+    const signature = req.headers['x-sepay-signature'];
+    const apiKey = req.headers['x-api-key'];
+
+    if (!process.env.SEPAY_SECRET || !process.env.SEPAY_API_KEY) {
+      return res.status(500).json({ success: false, message: 'Server not configured' });
+    }
+
+    if (!verifySignature(req.body.toString(), signature, process.env.SEPAY_SECRET)) {
+      return res.status(401).json({ success: false, message: 'Invalid signature' });
+    }
+
+    if (!apiKey || !db.users.some(u => u.apiKey === apiKey)) {
+      return res.status(403).json({ success: false, message: 'Invalid API key' });
+    }
+
+    const data = JSON.parse(req.body.toString());
+    const deposit_id = data.deposit_id;
+    if (!deposit_id) return res.json({ success: false, message: 'Missing deposit_id' });
+
+    if (db.deposits.find(d => d.deposit_id === deposit_id)) {
+      return res.json({ success: false, message: 'Duplicate deposit' });
+    }
+
+    // Verify via SePay API
+    const sepayApiKey = process.env.SEPAY_API_KEY;
+    const verifyResp = await axios.get(`https://sepay.vn/api/deposit/${deposit_id}`, {
+      headers: { Authorization: `Bearer ${sepayApiKey}` },
+      timeout: 5000
+    });
+
+    const tx = verifyResp.data;
+    if (!tx || !tx.success || !tx.credited) {
+      return res.json({ success: false, message: 'Transaction not confirmed' });
+    }
+
+    // Parse username
+    const content = tx.content || '';
+    const usernameMatch = content.match(/nap\s+(\w+)/i);
+    if (!usernameMatch) return res.json({ success: false, message: 'No username found' });
+    const username = usernameMatch[1];
+
+    const user = db.users.find(u => u.username === username);
+    if (!user) return res.json({ success: false, message: 'User not found' });
+
+    const amount = parseFloat(tx.amount || 0);
+    if (isNaN(amount) || amount <= 0) return res.json({ success: false, message: 'Invalid amount' });
+
+    user.balance = (user.balance || 0) + amount;
+
+    db.deposits.push({
+      deposit_id,
+      username,
+      amount,
+      content,
+      created_at: new Date().toISOString()
+    });
+
+    await saveDb();
+
+    console.log('Nạp tiền SePay thành công:', username, amount);
+    res.json({ success: true });
+
+  } catch (err) {
+    console.error('Lỗi webhook SePay + API key:', err);
+    res.status(500).json({ success: false });
+  }
+});
