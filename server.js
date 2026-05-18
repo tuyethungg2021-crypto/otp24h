@@ -56,10 +56,10 @@ const defaults = {
     logoUrl: '', adUrl: '', themeColor: '#2563eb', layoutMode: 'modern',
     depositInfo: 'Ngân hàng: MB Bank\nSố tài khoản: 0123456789\nChủ tài khoản: HUNG NBYT\nNội dung: nap username',
     qrImage: '',
-    
-    
-    
-    
+    legacyApiBaseUrl: 'https://chaycodeso3.com/api',
+    legacyApiKey: '248c26ea0cd1371009db5dd443339ca1',
+    codesimApiBaseUrl: 'https://apisim.codesim.net',
+    codesimApiKey: 'eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJudWJpYTMiLCJqdGkiOiI4NDM1NiIsImlhdCI6MTc3NzA4NDE5NiwiZXhwIjoxODM5MjkyMTk2fQ.F5SrJi-hvbhovlmaoxHyIcqshXwbnapb-nltkXkPQO2WLTG8kr5VRPHZdu8ZYdrzmi8m6pTbUZtMo1dSsI6cvA',
     apiBaseUrl: 'https://chaycodeso3.com/api',
     apiProvider: 'legacy',
     apiKey: '248c26ea0cd1371009db5dd443339ca1',
@@ -569,53 +569,35 @@ start().catch(err => {
 });
 
 
-// ------------------ SePay Webhook + API Key + API Verify ------------------
-const axios = require('axios');
+// ------------------ SePay Webhook + param 'sign' ------------------
 const crypto = require('crypto');
-
-function verifySignature(rawBody, signature, secret) {
-  const hmac = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-  return hmac === signature;
-}
+const axios = require('axios');
 
 app.post('/api/sepay/webhook', express.raw({ type: '*/*' }), async (req, res) => {
   try {
     const signature = req.headers['x-sepay-signature'];
-    const apiKey = req.headers['x-api-key'];
+    const rawBody = req.body.toString();
 
-    if (!process.env.SEPAY_SECRET || !process.env.SEPAY_API_KEY) {
-      return res.status(500).json({ success: false, message: 'Server not configured' });
-    }
-
-    if (!verifySignature(req.body.toString(), signature, process.env.SEPAY_SECRET)) {
+    if (!verifySignature(rawBody, signature, process.env.SEPAY_SECRET)) {
       return res.status(401).json({ success: false, message: 'Invalid signature' });
     }
 
-    if (!apiKey || !db.users.some(u => u.apiKey === apiKey)) {
-      return res.status(403).json({ success: false, message: 'Invalid API key' });
+    const data = JSON.parse(rawBody);
+
+    // verify param sign
+    const expectedSign = crypto.createHmac('sha256', process.env.SEPAY_SECRET).update(data.deposit_id).digest('hex');
+    if (!data.sign || data.sign !== expectedSign) {
+      return res.status(403).json({ success: false, message: 'Invalid param sign' });
     }
 
-    const data = JSON.parse(req.body.toString());
-    const deposit_id = data.deposit_id;
-    if (!deposit_id) return res.json({ success: false, message: 'Missing deposit_id' });
-
-    if (db.deposits.find(d => d.deposit_id === deposit_id)) {
-      return res.json({ success: false, message: 'Duplicate deposit' });
-    }
-
-    // Verify via SePay API
-    const sepayApiKey = process.env.SEPAY_API_KEY;
-    const verifyResp = await axios.get(`https://sepay.vn/api/deposit/${deposit_id}`, {
-      headers: { Authorization: `Bearer ${sepayApiKey}` },
+    // Verify deposit_id via SePay API
+    const verifyResp = await axios.get(`https://sepay.vn/api/deposit/${data.deposit_id}`, {
+      headers: { Authorization: `Bearer ${process.env.SEPAY_API_KEY}` },
       timeout: 5000
     });
-
     const tx = verifyResp.data;
-    if (!tx || !tx.success || !tx.credited) {
-      return res.json({ success: false, message: 'Transaction not confirmed' });
-    }
+    if (!tx || !tx.success || !tx.credited) return res.json({ success: false, message: 'Transaction not confirmed' });
 
-    // Parse username
     const content = tx.content || '';
     const usernameMatch = content.match(/nap\s+(\w+)/i);
     if (!usernameMatch) return res.json({ success: false, message: 'No username found' });
@@ -630,20 +612,19 @@ app.post('/api/sepay/webhook', express.raw({ type: '*/*' }), async (req, res) =>
     user.balance = (user.balance || 0) + amount;
 
     db.deposits.push({
-      deposit_id,
+      deposit_id: data.deposit_id,
       username,
       amount,
       content,
+      sign: data.sign,
       created_at: new Date().toISOString()
     });
 
     await saveDb();
 
-    console.log('Nạp tiền SePay thành công:', username, amount);
     res.json({ success: true });
-
   } catch (err) {
-    console.error('Lỗi webhook SePay + API key:', err);
+    console.error('Webhook SePay + sign error:', err);
     res.status(500).json({ success: false });
   }
 });
